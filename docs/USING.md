@@ -1,0 +1,247 @@
+# Using it
+
+This page is for everyone on the team. The agent lives in one Slack channel. You talk to it by
+mentioning it, **@Ads Command Center** (your developer may have given it another name), by replying
+in a thread it started, or in a direct message. It also has a Home tab: click its name in Slack.
+
+## The words it uses
+
+| Word | What it means |
+|---|---|
+| **Operator** | A person allowed to approve moves and give orders. Your developer sets who the operators are. Everyone else can ask anything and gets answers, but cannot change the account. |
+| **Result** | The one thing your ads are for: a purchase, a lead, a booked test ride. The agent calls it by your team's word for it. |
+| **Target** | What one result is worth paying for. Every judgment is against it. |
+| **Ceiling** | The most the account may spend per day in total. Nothing the agent does can go above it. |
+| **Desk** | The one message it posts and pins in the channel each day. The report, the cards and the alerts go in its thread, so the channel stays readable. |
+| **Card** | One proposed move (pause an ad, raise a budget...) with the numbers behind it and Approve and Reject buttons. Each card has a number, like `#14`. |
+| **Brain** | What the agent knows about your business: the company, the offer, the buyer, the words to use. Your team writes it. See [PLAYBOOK.md](PLAYBOOK.md). |
+| **Ladder** | Which kinds of moves wait for a person and which may happen on their own. Everything starts as waiting. |
+| **Threshold** | One of the numbers the agent judges ads by, like how much an ad may spend with no result before it is called a loser. Each is a multiple of the target. |
+| **Journal** | The agent's record of every change it sent to Meta. When Meta never answered one, the journal holds every later change until a person checks it. |
+
+## The daily report
+
+Every morning the agent posts the report under the desk. A short read at the top is written by
+Claude from the numbers; the numbers themselves come straight from Meta:
+
+- spend and results yesterday, against the target and the 7 day average;
+- the second thing you watch, if your team has one (for example leads next to purchases);
+- the last 7 days;
+- the best ads yesterday, and the ads that spent with no result;
+- comments hidden or flagged, cards waiting, open issues.
+
+Yesterday can still go up: Meta keeps counting results for about two days.
+
+Right after it comes the scoreboard: every ad that spent in the last 7 days, each marked winning,
+on track, behind, losing or too early.
+
+All amounts are in your ad account's currency.
+
+## Cards
+
+A card is one proposed move with the numbers behind it:
+
+```
+Pause ad: Spring video v2
+480 spent over 8 days with no test rides.
+#14
+[Approve] [Reject]
+```
+
+(The example leaves out the currency symbol; your cards show your account's.)
+
+Approve or Reject opens a small window with an optional "why". Write one when you can: once a week
+the agent turns the notes into lessons it follows from then on ("we never pause a new creative
+before day 5", "this campaign is a brand play, leave it").
+
+What happens when an operator taps Approve:
+
+- the agent checks the card was not already decided;
+- for a budget card, it reads the budget from Meta again; if someone changed it in Ads Manager
+  since the card was made, the card is refused as out of date and the next run proposes again
+  with fresh numbers;
+- it checks the ceiling again;
+- it makes the change in Meta, and the card turns into a one line record of who approved it and
+  why.
+
+When two or more pause or turn-back-on cards arrive together, there is an Approve all button.
+Budget cards are always one tap each.
+
+A card that stops making sense closes itself: the ad was paused by hand, the budget already changed,
+or a week went by.
+
+## Asking questions
+
+Mention it in the channel, reply in one of its threads, or send it a direct message:
+
+- "how did we do yesterday?"
+- "which ad is winning this week?"
+- "why did cost per purchase jump on Tuesday?"
+- "break down last week by placement"
+- "what changed on the account in the last 3 days?"
+- "show me the comments on our ads from today"
+- "how far do people watch our video ads?"
+- "which lead forms are live and how many leads did each get?"
+
+It pulls live numbers before it answers and says when data is thin or not yet final.
+
+**Threads.** In a thread the agent started (the desk, a report, a card) or one where it was
+mentioned or already answered, just reply: no mention needed. It reads the whole thread first, so
+"and the week before?" works. A reply that mentions someone else is left for that person.
+
+Under every answer there is a line written by the system, not by the model:
+
+```
+Actions this turn: paused ad Spring video v2
+```
+
+or `No account changes this turn (read only).` If the answer ever claims a change that this line
+does not show, the line is right.
+
+## Orders (operators)
+
+Say it plainly and it is done right away:
+
+- "pause the Retargeting campaign"
+- "set the Broad ad set to 150 a day"
+- "activate ad set Lookalike 2%"
+- "duplicate the Spring campaign and activate the copy"
+
+The ceiling applies: an order that would take a budget or the daily total above it is refused, and
+the line under the answer says so. After each order it reads the change back from Meta and keeps
+your words with the record. A copied campaign is built paused and switched on only at the end, and
+only if you asked.
+
+When the agent itself thinks something should change, it posts a card instead of acting. Ask it
+"what would you change?" and it posts its ideas as cards.
+
+## Comments and messages
+
+Every hour the agent reads the comments on your live ads and recent posts. It hides clear spam,
+harassment and flat false claims ("this is a scam"). Honest criticism, questions (even skeptical
+ones) and jokes stay up. Anything it is unsure about stays up and is listed once in the desk thread.
+Each comment in that list ends with its id in code font, like `123_456`.
+
+**Replying to a comment or a message:**
+
+1. Ask in the channel: "reply to comment 123_456 thanking them and pointing to the pricing page".
+   The id comes from the sweep list, or ask "show me today's comments" and it lists them with ids.
+2. It answers in the thread with the exact text it would send, and sends nothing yet.
+3. An operator replies in that thread: "send it", or asks for changes ("shorter, and no
+   exclamation mark") and it shows the new text.
+4. Only after an operator approves the exact text does it send, and the line under its answer
+   says it was sent.
+
+Meta allows replies to a message only within 24 hours of the person's last message. To undo a hide:
+"unhide comment 123_456".
+
+## The brain
+
+The brain is what the agent knows about your business. Each row is named by a section and a name
+joined by a slash, like `business/offer` (the section `business`, the name `offer`), and holds a
+paragraph of text. Capitals make no difference: `Business/Offer` is the same row.
+
+```
+brain                                   list every row
+brain set business/company <text>       add a row, or replace it
+brain rm business/old_offer             remove a row
+```
+
+A `brain set` without the slash, or without text after the name, saves nothing and says how to write
+it.
+
+When the agent learns a lasting fact in conversation, it proposes a brain change as a card with
+Apply and Dismiss. When only the team can answer something, it asks with answer buttons.
+[PLAYBOOK.md](PLAYBOOK.md) lists the rows to write on day one.
+
+## Commands
+
+Mention the agent (or DM it) with one of these. They answer at once, without the model:
+
+| Command | What |
+|---|---|
+| `help` | this list |
+| `report` | yesterday's report now |
+| `scoreboard`, `scoreboard 14d` | every ad that spent, ranked against the target |
+| `pending` | every card waiting, posted again |
+| `status` | what counts as a result, the target and where it comes from, the ceiling, the currency, changed thresholds, job health, open issues |
+| `optimize` | look for moves now: it posts cards, and pauses ads on its own only if the ladder allows it |
+| `ladder` | which kinds of moves wait for a person and which happen on their own |
+| `ladder set pause auto` | let clear losing ads pause on their own |
+| `ladder set pause ask` | send pauses back to waiting for a person |
+| `undo 14` | reverse the move with card number 14 |
+| `freeze <why>`, `unfreeze` | stop the agent proposing moves (cards already posted still work), or let it start again |
+| `brain`, `brain set ...`, `brain rm ...` | see "The brain" above |
+| `thresholds` | every threshold and its value now |
+| `threshold pause.zeroResultSpend 4` | change one threshold (`default` instead of the number puts it back) |
+| `scan comments` | run the comment sweep now |
+| `journal` | changes Meta never answered (see "When Meta never answered a change" below) |
+| `journal clear 7` | clear number 7, after you checked it |
+
+**Who can use what.** Anyone can read: `help`, `report`, `scoreboard`, `pending`, `status`,
+`ladder`, `brain`, `thresholds` and `journal`. `report` only posts numbers, so anyone can ask for
+one. Everything else needs an operator, because it can change the account or the agent:
+`optimize` can pause ads on its own when pauses are set to automatic, `scan comments` hides
+comments on your Page, and the rest change the brain, the ladder, the thresholds or the freeze.
+
+**Where the numbers come from:** a card's number is the `#14` at the bottom of the card; an
+automatic move's message ends with its undo command, number included; a journal number comes from
+`journal`; a comment id is at the end of its line in the comment sweep; a post id (for
+`moderation/extra_posts`, see [PLAYBOOK.md](PLAYBOOK.md)) comes from asking "list our recent Page
+posts with their ids", or "what is the post id of the ad Spring video v2?"
+
+## The ladder
+
+Every kind of move starts as waiting for a person. `ladder set pause auto` lets clear losing ads
+pause on their own; each one is posted in the desk thread with its undo command. Undoing an
+automatic pause puts pauses back to waiting. Raising a budget, trimming a budget and turning an ad
+back on always wait for a person.
+
+## When it stops itself
+
+The agent stops proposing moves, and says why in the channel, when:
+
+- the numbers look broken: far more results than clicks, impressions with no spend, or no results
+  at all on spend of several times the target (usually broken tracking; tell your developer);
+- something looks wrong: a day's spend far past the budget, cost per result jumping to over 3
+  times its usual level, or a live campaign suddenly not delivering;
+- an operator sent `freeze`.
+
+It says once when it trusts the numbers again. When it cannot read Meta at all, it says so as an
+issue in the channel after a few failed tries.
+
+## When Meta never answered a change
+
+If Meta does not answer a change (a timeout, a dropped connection), the agent cannot know whether
+it happened. It holds every later change until that one is settled. It tries to settle it on its
+own the next time it starts. Otherwise `journal` lists it, with what it changed. To settle one:
+
+1. Open the ad, ad set or campaign it names in Ads Manager.
+2. Look at what the change was about: the status (on or paused) or the daily budget.
+3. If the change is there, or you make it by hand now, send `journal clear <number>`.
+
+## The Home tab
+
+Click the agent's name, then Home: the last 7 days, the target and ceiling, whether it is frozen,
+the cards waiting (with Approve and Reject for operators), open issues, the ladder and how each
+scheduled job is doing.
+
+## Weekly review
+
+Once a week: how many cards were approved, rejected or automatic, the lessons it now follows (from
+the last 30 days of "why" notes), what each move from the last 3 weeks did (results a day, cost per
+result and spend a day, before against after), and the ad scoreboard.
+
+## Who sets the numbers
+
+- **The target:** your developer sets it at install, and an operator can change it any time in
+  Slack: `brain set policy/target 45`. The one in the brain wins; `status` says which is in use.
+- **The ceiling:** only your developer, in the settings, followed by a restart. Nobody can raise it
+  from Slack, on purpose: it is the one number that caps every budget the agent touches.
+- **Who the operators are and what counts as a result:** your developer, in the settings.
+
+## For your developer
+
+Who the operators are, the target, the ceiling and what counts as a result are settings. See
+[SETTINGS.md](SETTINGS.md). Adding or removing an operator is a settings change and a restart.
+`OPTIMIZER_ENABLED=false` turns the optimizer off: `status` then says so, and `optimize` refuses.

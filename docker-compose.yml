@@ -1,0 +1,40 @@
+# Meta Ads Command Center, with its own Postgres, for a local try or a small server:
+#   cp .env.example .env    (fill it in; leave DATABASE_URL empty to use the bundled database)
+#   docker compose run --rm agent npm run check
+#   docker compose up -d
+# The agent creates its tables on the first start. Any terminal command runs the same way:
+#   docker compose run --rm agent npm run cmd -- brain     (or `exec` when it is running)
+# To upgrade later:
+#   git pull && docker compose up -d --build
+# Your own Postgres works too: set DATABASE_URL in .env and run only the agent service
+# (docker compose up agent --no-deps).
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+      POSTGRES_DB: agent
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    # Uncomment to reach the bundled database from your own tools on this machine.
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent"]
+      interval: 5s
+      retries: 10
+  agent:
+    build: .
+    env_file: .env
+    environment:
+      # The bundled database, unless .env sets DATABASE_URL to your own.
+      DATABASE_URL: ${DATABASE_URL:-postgres://agent:agent@db:5432/agent}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+volumes:
+  dbdata:

@@ -1,0 +1,28 @@
+{
+  "name": "meta-ads-command-center",
+  "version": "1.0.0",
+  "description": "A Slack agent that runs a Meta ads account with your team: reports, answers, proposals you approve, direct orders and comment moderation.",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/index.mjs",
+    "check": "node src/cli.mjs check",
+    "db:setup": "node src/cli.mjs db-setup",
+    "ask": "node src/cli.mjs ask",
+    "job": "node src/cli.mjs run",
+    "cmd": "node src/cli.mjs cmd",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.135.0",
+    "@slack/bolt": "^3.22.0",
+    "@slack/web-api": "^6.13.0",
+    "dotenv": "^16.6.1",
+    "pg": "^8.13.1",
+    "zod": "^4.6.7"
+  }
+}

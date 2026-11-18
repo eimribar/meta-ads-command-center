@@ -1,0 +1,42 @@
+# Create the Slack app from this file: api.slack.com/apps > Create New App > From a manifest.
+# It matches what the code uses: Socket Mode (no public URL), buttons and modals, the Home tab,
+# mentions, direct messages, and replies in the app's own threads.
+# The name is what your team types to mention it (@Ads Command Center). Change both names
+# together if you want another one.
+display_information:
+  name: Ads Command Center
+  description: Runs your Meta ads with you from Slack
+  background_color: "#1d3557"
+features:
+  app_home:
+    home_tab_enabled: true
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: Ads Command Center
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read   # mentions in channels
+      - channels:history    # thread replies and context in public channels
+      - channels:read       # the first-run check reads the channel
+      - chat:write          # posting the report, cards and answers
+      - groups:history      # the same, in a private channel
+      - groups:read
+      - im:history          # direct messages to the app
+      - pins:write          # pinning the daily desk message
+      - users:read          # the first-run check finds the operators
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_home_opened
+      - app_mention
+      - message.channels
+      - message.groups
+      - message.im
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false
