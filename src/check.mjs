@@ -1,7 +1,8 @@
 // The first-run check (`npm run check`). One line per piece: OK, a warning, or a problem with
 // the fix. Each problem is reported once, and no line ever carries a setting's value.
-import { parseConfig, REQUIRED, dbUser } from './config.mjs';
-import { actionTypesFor, actionTypesSeen } from './metrics.mjs';
+import { parseConfig, REQUIRED, dbUser, DEFAULT_META_API_VERSION } from './config.mjs';
+import { actionTypeFor, actionTypesSeen } from './metrics.mjs';
+import { redact } from './redact.mjs';
 import { TABLES, explainDbError, tableStatus, describeTables } from './schema.mjs';
 import { parseTarget } from './brain-rules.mjs';
 
@@ -20,6 +21,8 @@ const HINT = {
   META_IG_USER_ID: 'leave it empty; it is found from the Page',
   CAMPAIGN_ALLOWLIST: 'campaign ids from Ads Manager (the Campaign ID column), separated by commas, or leave it empty for the whole account',
   RESULT_EVENT: 'the event that counts as a result, for example Purchase, Lead or Schedule',
+  RESULT_ACTION_TYPE: 'one action type, for a custom conversion offsite_conversion.custom.<its id> (Events Manager > Custom conversions, the ID column)',
+  SECONDARY_ACTION_TYPE: 'one action type, for a custom conversion offsite_conversion.custom.<its id> (Events Manager > Custom conversions, the ID column)',
   ANTHROPIC_API_KEY: 'create a key in the Claude Console (platform.claude.com) > API keys',
   SLACK_BOT_TOKEN: 'Slack app settings > OAuth & Permissions > Bot User OAuth Token (starts with xoxb-)',
   SLACK_APP_TOKEN: 'Slack app settings > Basic Information > App-Level Tokens, scope connections:write (starts with xapp-)',
@@ -39,8 +42,7 @@ function lineMaker() {
     head: (what) => lines.push({ level: 'head', text: `\n${what}` }),
   };
 }
-const hide = (s) => String(s).replace(/(xox[abpe]\.?[A-Za-z0-9-]*-|xapp-|EAA|sk-ant-)[A-Za-z0-9_.-]+/g, '[hidden]').replace(/postgres(ql)?:\/\/\S+/gi, '[connection string]');
-const short = (e) => hide(e?.data?.error || e?.message || e).slice(0, 160);
+const short = (e) => redact(String(e?.data?.error || e?.message || e)).slice(0, 160);
 
 // What a Meta error means, in plain words, with the fix.
 export function metaProblem(e, { what, assign }) {
@@ -66,7 +68,7 @@ export async function runCheck(env, deps) {
   // A setting that has a problem above is not reported again as "not set".
   const unset = (k) => !problemKeys.has(k) && !c[k] && !(Array.isArray(c[k]) && c[k].length);
   if (!problemKeys.has('ADMIN_SLACK_USER_IDS') && !c.ADMIN_SLACK_USER_IDS?.length) L.warn('ADMIN_SLACK_USER_IDS is empty', 'nobody can approve cards or give orders');
-  if (unset('META_PAGE_ID')) L.warn('META_PAGE_ID is not set', 'comment moderation and message replies are off');
+  if (unset('META_PAGE_ID')) L.warn('META_PAGE_ID is not set', 'comment moderation is off (no timer) and message replies are off');
   const has = (k) => !problemKeys.has(k) && c[k];
   const flags = { targetUnset: unset('TARGET_COST_PER_RESULT'), ceilingUnset: unset('MAX_DAILY_BUDGET') };
 
@@ -125,12 +127,18 @@ export async function runCheck(env, deps) {
         const since = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10), until = new Date().toISOString().slice(0, 10);
         const rows = (await g(`${c.META_AD_ACCOUNT_ID}/insights`, { level: 'account', fields: 'actions,conversions', time_range: JSON.stringify({ since, until }) })).data || [];
         const seen = actionTypesSeen(rows);
+        // One action type per event for the whole install (metrics.mjs). The check says which one it
+        // counts, and what else the account reported, so a wrong pick is easy to see.
         const report = (name, event, override, label) => {
-          const types = actionTypesFor(event, override);
-          const hit = types.map((t) => seen.find((s) => s.type === t)).find(Boolean);
-          if (hit) L.ok(`${name} "${label || event}" seen: ${hit.total} in the last 30 days (counted as ${hit.type})`);
-          else L.bad(`${name} "${label || event}" was not reported in the last 30 days (looked for ${types.join(', ')})`,
-            seen.length ? `pick the right one from what the account reported and set ${name === 'result' ? 'RESULT_ACTION_TYPE' : 'SECONDARY_ACTION_TYPE'} (or fix the event name): ${seen.slice(0, 15).map((s) => s.type).join(', ')}` : 'the account reported no conversions in 30 days; check the pixel is installed and the event fires');
+          const setting = name === 'result' ? 'RESULT_ACTION_TYPE' : 'SECONDARY_ACTION_TYPE';
+          const type = actionTypeFor(event, override);
+          if (!type) return;    // a custom event with no action type is reported under Settings
+          const hit = seen.find((x) => x.type === type);
+          const others = seen.filter((x) => x.type !== type).slice(0, 12).map((x) => `${x.type} (${x.total})`);
+          const also = others.length ? `\n      the account also reported: ${others.join(', ')}` : '';
+          if (hit) L.ok(`${name} "${label || event}" seen: ${hit.total} in the last 30 days, counted as ${type}${also}`);
+          else L.bad(`${name} "${label || event}" was not reported in the last 30 days (counted as ${type})`,
+            seen.length ? `set ${setting} to the one that counts it, from what the account reported (or fix the event name): ${seen.slice(0, 15).map((x) => x.type).join(', ')}` : 'the account reported no conversions in 30 days; check the pixel is installed and the event fires');
         };
         report('result', c.RESULT_EVENT, c.RESULT_ACTION_TYPE, c.RESULT_LABEL);
         if (c.SECONDARY_EVENT) report('secondary', c.SECONDARY_EVENT, c.SECONDARY_ACTION_TYPE, c.SECONDARY_LABEL);
@@ -189,10 +197,12 @@ async function rest(L, c, has, deps) {
     try {
       pg = await deps.pg(c.DATABASE_URL, c.DATABASE_SSL, c.DATABASE_SSL_CA);
       const ssl = pg.sslMode ? ` (SSL: ${pg.sslMode})` : '';
-      const t = describeTables(await tableStatus(pg));
-      if (t.level === 'ok') L.ok(`connected${ssl}; ${t.what}`);
-      else if (t.level === 'warn') L.warn(`connected${ssl}; ${t.what}`, t.fix);
-      else L.bad(`connected${ssl}, but ${t.what}`, t.fix);
+      const status = await tableStatus(pg);
+      L.ok(`connected${ssl}`);
+      const t = describeTables(status);
+      if (t.level === 'ok') L.ok(`tables: ${t.what}`);
+      else if (t.level === 'warn') L.warn(`tables: ${t.what}`, t.fix);
+      else L.bad(`tables: ${t.what}`, t.fix);
       if (t.level !== 'bad') {
         const [row] = await pg.query("select content from brain where lower(scope) = 'policy' and lower(key) = 'target'").catch(() => []);
         out.brainTarget = Boolean(parseTarget(row?.content));
@@ -247,7 +257,7 @@ export async function realDeps() {
   const { createPgDb } = await import('./db.mjs');
   return {
     graph: async (path, params, { token, version }) => {
-      const url = new URL(`https://graph.facebook.com/${version || 'v25.0'}/${path}`);
+      const url = new URL(`https://graph.facebook.com/${version || DEFAULT_META_API_VERSION}/${path}`);
       for (const [k, v] of Object.entries(params || {})) url.searchParams.set(k, typeof v === 'object' ? JSON.stringify(v) : String(v));
       url.searchParams.set('access_token', token);
       let j;

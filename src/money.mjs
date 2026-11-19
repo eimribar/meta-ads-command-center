@@ -54,9 +54,14 @@ export function money(v) {
   return f ? f.format(n) : `${n.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${code}`;
 }
 
-// A number typed by a person ("1,250", "$1250", "£ 480") as an amount. Null when it is not one.
-export function parseAmount(v) {
+// A number typed by a person ("1,250", "$1250", "£ 480", "12.50") as an amount. Null when it is
+// not one. A comma only separates thousands (1,250 or 1,250,000.50): "12,5" is refused rather
+// than read as 125, because in many countries it means 12.5.
+export function parseAmountText(v) {
   if (v == null) return null;
-  const n = Number(String(v).replace(/[\p{Sc},\s]/gu, ''));
+  const s = String(v).replace(/[\p{Sc}\s]/gu, '');
+  if (!/^(\d+|\d{1,3}(,\d{3})+)(\.\d+)?$/.test(s)) return null;
+  const n = Number(s.replace(/,/g, ''));
   return Number.isFinite(n) && n > 0 ? n : null;
 }
+export const parseAmount = parseAmountText;

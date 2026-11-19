@@ -50,6 +50,7 @@ export function fakeAccount({ days = 10, adsetBudget = 100, tracking = true, ext
     if (method === 'GET' && path === 'act_111/ads') return { data: state.ads };
     if (method === 'GET' && path === 'act_111/adsets') return { data: state.adsets };
     if (method === 'GET' && path === 'act_111/campaigns') return { data: state.campaigns };
+    if (method === 'GET' && /^\d+\/ads$/.test(path)) return { data: state.ads.filter((a) => a.adset_id === path.split('/')[0]) };
     if (method === 'GET' && byId()[path]) {
       const o = byId()[path];
       return { id: o.id, account_id: '111', campaign_id: o.campaign_id || o.id, name: o.name, configured_status: o.status, effective_status: o.effective_status, daily_budget: o.daily_budget };

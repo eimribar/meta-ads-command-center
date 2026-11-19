@@ -81,10 +81,18 @@ test('time zones and true or false settings are checked, not guessed', () => {
   assert.equal(parseConfig({ ...BASE_ENV, REPORT_ENABLED: 'TRUE' }).config.REPORT_ENABLED, true);
 });
 
-test('the Graph API version is written any of three ways and stored one way', () => {
-  for (const v of ['25', 'v25', 'v25.0', 'V25.0']) assert.equal(parseConfig({ ...BASE_ENV, META_API_VERSION: v }).config.META_API_VERSION, 'v25.0', v);
-  assert.equal(parseConfig({ ...BASE_ENV }).config.META_API_VERSION, 'v25.0');
-  assert.match(msg({ META_API_VERSION: 'latest' }, 'META_API_VERSION'), /like v25\.0/);
+test('the Graph API version is written any of three ways and stored one way; the default is v27.0', () => {
+  for (const v of ['27', 'v27', 'v27.0', 'V27.0']) assert.equal(parseConfig({ ...BASE_ENV, META_API_VERSION: v }).config.META_API_VERSION, 'v27.0', v);
+  assert.equal(parseConfig({ ...BASE_ENV }).config.META_API_VERSION, 'v27.0');
+  assert.match(msg({ META_API_VERSION: 'latest' }, 'META_API_VERSION'), /like v27\.0/);
+});
+
+test('word settings take any case, and amounts take a currency sign but not a decimal comma', () => {
+  const { config } = parseConfig({ ...BASE_ENV, DATABASE_SSL: 'Require', MODERATION_ACTION: 'FLAG', TARGET_COST_PER_RESULT: '$1,250.50' });
+  assert.equal(config.DATABASE_SSL, 'require');
+  assert.equal(config.MODERATION_ACTION, 'flag');
+  assert.equal(config.TARGET_COST_PER_RESULT, 1250.5);
+  assert.match(msg({ MAX_DAILY_BUDGET: '12,5' }, 'MAX_DAILY_BUDGET'), /decimal point/);
 });
 
 test('a Slack channel link names the channel id in it', () => {

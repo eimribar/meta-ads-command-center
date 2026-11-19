@@ -4,7 +4,6 @@ import { graph, graphAll, account, scopeFilter, allowlist } from './meta.mjs';
 import { rt } from './runtime.mjs';
 import { fromMinor, setCurrency, currency } from './money.mjs';
 
-
 // The ad account's currency and time zone. Read at start; budgets cannot be converted without
 // the currency, so anything that reads or writes a budget makes sure it is known.
 export async function loadAccountBasics() {
@@ -17,21 +16,44 @@ export async function ensureCurrency() {
   return currency();
 }
 
+// Every read here must be complete: a total that misses rows past a read cap would let a budget
+// change through the ceiling, so a read that stops early throws instead (graphAll complete).
+export const LIVE_CAPS = { ads: 5000, adsets: 2000, campaigns: 1000 };
 export async function liveStructure() {
   await ensureCurrency();
   const list = allowlist();
   const byCampaign = list ? { filtering: [{ field: 'campaign.id', operator: 'IN', value: list }] } : {};
   const campFilter = list ? { filtering: [{ field: 'id', operator: 'IN', value: list }] } : {};
+  const all = { complete: true };
   const [ads, adsets, campaigns] = await Promise.all([
-    graphAll(`${account()}/ads`, { fields: 'id,name,status,effective_status,adset_id,campaign_id', ...byCampaign }, 3000),
-    graphAll(`${account()}/adsets`, { fields: 'id,name,status,effective_status,daily_budget,campaign_id', ...byCampaign }, 1000),
-    graphAll(`${account()}/campaigns`, { fields: 'id,name,status,effective_status,daily_budget,objective', ...campFilter }, 500),
+    graphAll(`${account()}/ads`, { fields: 'id,name,status,effective_status,adset_id,campaign_id', ...byCampaign }, LIVE_CAPS.ads, all),
+    graphAll(`${account()}/adsets`, { fields: 'id,name,status,effective_status,daily_budget,lifetime_budget,campaign_id', ...byCampaign }, LIVE_CAPS.adsets, all),
+    graphAll(`${account()}/campaigns`, { fields: 'id,name,status,effective_status,daily_budget,lifetime_budget,objective', ...campFilter }, LIVE_CAPS.campaigns, all),
   ]);
   const out = { ads: {}, adsets: {}, campaigns: {}, pulledAt: rt.now().toISOString() };
-  for (const c of campaigns) out.campaigns[c.id] = { name: c.name, configured: c.status, effective: c.effective_status, daily_budget: fromMinor(c.daily_budget), objective: c.objective };
-  for (const s of adsets) out.adsets[s.id] = { name: s.name, configured: s.status, effective: s.effective_status, daily_budget: fromMinor(s.daily_budget), campaign_id: s.campaign_id };
+  for (const c of campaigns) out.campaigns[c.id] = { name: c.name, configured: c.status, effective: c.effective_status, daily_budget: fromMinor(c.daily_budget), lifetime_budget: fromMinor(c.lifetime_budget), objective: c.objective };
+  for (const s of adsets) out.adsets[s.id] = { name: s.name, configured: s.status, effective: s.effective_status, daily_budget: fromMinor(s.daily_budget), lifetime_budget: fromMinor(s.lifetime_budget), campaign_id: s.campaign_id };
   for (const a of ads) out.ads[a.id] = { name: a.name, configured: a.status, effective: a.effective_status, adset_id: a.adset_id, campaign_id: a.campaign_id };
   return out;
+}
+
+// The entity at a level, or null. Budgets and activations only act on an id found at the level
+// the caller named, so a campaign id passed as an ad set (or the other way round) is refused.
+const TABLE = { campaign: 'campaigns', adset: 'adsets', ad: 'ads' };
+export const entityAt = (live, level, id) => live?.[TABLE[level]]?.[String(id)] || null;
+
+// True when spend under this campaign or ad set is set by a lifetime budget, which the daily
+// ceiling cannot see: the campaign's own, or any of its ad sets'.
+export function usesLifetimeBudget(live, level, id) {
+  if (level === 'campaign') {
+    if (live.campaigns[id]?.lifetime_budget) return true;
+    return Object.values(live.adsets).some((s) => String(s.campaign_id) === String(id) && s.lifetime_budget);
+  }
+  if (level === 'adset') {
+    const s = live.adsets[id];
+    return Boolean(s?.lifetime_budget || live.campaigns[s?.campaign_id]?.lifetime_budget);
+  }
+  return false;
 }
 
 // Sum of the daily budgets that are spending: active campaigns with a campaign budget, plus
@@ -52,6 +74,9 @@ export function activeAdsBySet(live) {
   for (const a of Object.values(live.ads)) if (a.effective === 'ACTIVE') counts[a.adset_id] = (counts[a.adset_id] || 0) + 1;
   return counts;
 }
+
+const LEVEL_WORDS = { campaign: 'a campaign', adset: 'an ad set', ad: 'an ad' };
+export const levelWords = (level) => LEVEL_WORDS[level] || level;
 
 export function levelOf(live, id) {
   if (live.campaigns[id]) return 'campaign';

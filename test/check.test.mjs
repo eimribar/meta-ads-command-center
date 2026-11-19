@@ -15,7 +15,7 @@ const SECRETS = {
 };
 const PERMS = ['ads_read', 'ads_management', 'pages_show_list', 'pages_read_engagement', 'pages_read_user_content', 'pages_manage_engagement', 'pages_messaging', 'instagram_basic', 'instagram_manage_comments', 'business_management'];
 
-function deps({ seen = [{ action_type: 'schedule_website', value: '12' }, { action_type: 'offsite_conversion.fb_pixel_lead', value: '40' }], tables = TABLES, inChannel = true } = {}) {
+function deps({ seen = [{ action_type: 'schedule_website', value: '12' }, { action_type: 'lead', value: '40' }, { action_type: 'schedule_total', value: '14' }], tables = TABLES, inChannel = true, upgraded = true, owner = 'agent' } = {}) {
   return {
     graph: async (path) => {
       if (path === 'me/permissions') return { data: PERMS.map((p) => ({ permission: p, status: 'granted' })) };
@@ -31,7 +31,7 @@ function deps({ seen = [{ action_type: 'schedule_website', value: '12' }, { acti
       users: { info: async () => ({ user: { deleted: false } }) },
       apps: { connections: { open: async () => { if (token !== FAKE.app) throw new Error('not_allowed_token_type'); return { ok: true }; } } },
     }),
-    pg: async () => fakePg({ tables }),
+    pg: async () => fakePg({ tables, upgraded, owner }),
     anthropic: () => ({ models: { retrieve: async () => ({ id: 'claude-opus-5-5' }) } }),
   };
 }
@@ -50,7 +50,7 @@ test('with nothing set, every required setting is named with its fix, and it exi
 test('all green with a working setup, and no value is ever printed', async () => {
   const r = await runCheck(SECRETS, deps());
   assert.equal(r.ok, true, r.text);
-  assert.match(r.text, /result "test rides" seen: 12 in the last 30 days \(counted as schedule_website\)/);
+  assert.match(r.text, /result "test rides" seen: 12 in the last 30 days, counted as schedule_website\n      the account also reported: lead \(40\), schedule_total \(14\)/);
   assert.match(r.text, /secondary "leads" seen: 40/);
   assert.match(r.text, /Ready\./);
   noValues(r.text);
@@ -64,10 +64,13 @@ test('a result event the account never reported names what it did report', async
   noValues(r.text);
 });
 
-test('missing tables and a bot outside the channel are red lines with fixes', async () => {
-  const r = await runCheck(SECRETS, deps({ tables: ['brain'], inChannel: false }));
+test('missing tables this user can create are a warning; a bot outside the channel is a red line', async () => {
+  let r = await runCheck(SECRETS, deps({ tables: [] }));
+  assert.equal(r.ok, true, 'a fresh database is not a problem: npm start creates the tables');
+  assert.match(r.text, /OK    connected \(SSL: require\)\nWARN  tables: the tables are not there yet: npm start creates them, or run npm run db:setup/);
+  r = await runCheck(SECRETS, deps({ tables: ['brain'], inChannel: false }));
   assert.equal(r.ok, false);
-  assert.match(r.text, /13 of the 14 tables are missing[\s\S]*fix: run npm run db:setup/);
+  assert.match(r.text, /WARN  tables: 13 of the 14 tables are missing[\s\S]*npm run db:setup/);
   assert.match(r.text, /bot is not in the channel[\s\S]*fix: in that channel, type \/invite/);
   noValues(r.text);
 });
@@ -120,7 +123,7 @@ test('the check shows the currency and the database SSL mode when all is well', 
   assert.equal(r.ok, true, r.text);
   assert.match(r.text, /currency EUR/);
   assert.match(r.text, /OK    scope: the whole ad account/);
-  assert.match(r.text, /connected \(SSL: require\); every table exists and this user can use them/);
+  assert.match(r.text, /OK    connected \(SSL: require\)\nOK    tables: every table exists and this user can use them/);
 });
 
 test('Meta errors get plain fixes', () => {
@@ -151,7 +154,7 @@ test('the bot line names the workspace, not a guessed bot user name', async () =
 test('the check reports owned tables as one red line, never as missing', async () => {
   const env = { ...BASE_ENV, META_ACCESS_TOKEN: '', META_AD_ACCOUNT_ID: '', SLACK_BOT_TOKEN: '', SLACK_APP_TOKEN: '', ANTHROPIC_API_KEY: '', DATABASE_URL: 'postgres://agent:pw@db.example.com:5432/agent' };
   const r = await runCheck(env, { pg: async () => fakePg({ owner: 'dbadmin', user: 'agent', canUse: false }) });
-  assert.match(r.text, /FIX   connected \(SSL: require\), but 14 of the tables exist but belong to the database user dbadmin/);
+  assert.match(r.text, /OK    connected \(SSL: require\)\nFIX   tables: 14 of the tables exist but belong to the database user dbadmin/);
   assert.ok(!/missing/.test(r.text.split('Database')[1]));
 });
 
@@ -177,7 +180,7 @@ test('the check says when the optimizer is turned off', async () => {
 test('the check itself reports a database user that cannot create the tables, with the GRANT', async () => {
   const env = { ...BASE_ENV, META_ACCESS_TOKEN: '', META_AD_ACCOUNT_ID: '', SLACK_BOT_TOKEN: '', SLACK_APP_TOKEN: '', ANTHROPIC_API_KEY: '', DATABASE_URL: 'postgres://agent:pw@db.example.com:5432/agent' };
   const r = await runCheck(env, { pg: async () => fakePg({ tables: [], canCreate: false, user: 'agent' }) });
-  assert.match(r.text, /FIX   connected \(SSL: require\), but the tables are not there yet, and this user cannot create them\n      fix: this database user \(agent\) is not allowed to create tables[\s\S]*GRANT CREATE ON SCHEMA public TO agent;/);
+  assert.match(r.text, /OK    connected \(SSL: require\)\nFIX   tables: the tables are not there yet, and this user cannot create them\n      fix: this database user \(agent\) is not allowed to create tables[\s\S]*GRANT CREATE ON SCHEMA public TO agent;/);
   assert.ok(!/run npm run db:setup/.test(r.text.split('Database')[1].split('Claude')[0]), 'not sent round to db:setup');
 });
 
@@ -185,7 +188,17 @@ test('a fix that spans several lines stays indented under its FIX line', async (
   const env = { ...BASE_ENV, META_ACCESS_TOKEN: '', META_AD_ACCOUNT_ID: '', SLACK_BOT_TOKEN: '', SLACK_APP_TOKEN: '', ANTHROPIC_API_KEY: '', DATABASE_URL: 'postgres://agent:pw@db.example.com:5432/agent' };
   const r = await runCheck(env, { pg: async () => fakePg({ owner: 'postgres', user: 'agent', canUse: false }) });
   const block = r.text.split('Database\n')[1].split('\n\n')[0].split('\n');
-  assert.match(block[0], /^FIX   /);
-  assert.ok(block.slice(1).every((l) => l.startsWith('      ')), block.join('\n'));
+  assert.match(block[0], /^OK    connected/);
+  assert.match(block[1], /^FIX   tables: /);
+  assert.ok(block.slice(2).every((l) => l.startsWith('      ')), block.join('\n'));
   assert.ok(block.some((l) => /ALTER DEFAULT PRIVILEGES FOR ROLE postgres/.test(l)));
+});
+
+test('tables from before an upgrade are named, and only their owner can add what is missing', async () => {
+  let r = await runCheck(SECRETS, deps({ upgraded: false }));
+  assert.equal(r.ok, true);
+  assert.match(r.text, /WARN  tables: the tables need an upgrade \(the column actions_log\.journal_id, the index actions_log_one_open\): npm start adds it, or run npm run db:setup/);
+  r = await runCheck(SECRETS, deps({ upgraded: false, owner: 'dbadmin' }));
+  assert.equal(r.ok, false);
+  assert.match(r.text, /FIX   tables: the tables need an upgrade [\s\S]*only their owner, dbadmin, can add it/);
 });

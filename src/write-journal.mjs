@@ -47,13 +47,27 @@ export async function journalWrite({ operations, metadata = {}, validate = async
     // A clear refusal from Meta means nothing changed; no answer at all means we don't know.
     if (e?.network) {
       await move('unknown', { error: String(e.message).slice(0, 250) }).catch(() => {});
-      throw new Error(`Write #${row.id} has an unknown outcome; further writes are held until it is checked. ${String(e.message).slice(0, 160)}`);
+      throw Object.assign(new Error(`Write #${row.id} has an unknown outcome; further writes are held until it is checked. ${String(e.message).slice(0, 160)}`), { unknown: true, journalId: row.id });
     }
     await move('not_applied', { error: String(e.message).slice(0, 250) }).catch(() => {});
     throw e;
   }
   await move('applied', receipt ?? { ok: true }).catch(() => {});
   return { ...(receipt || {}), journalId: row.id };
+}
+
+// A settled write settles the moves that were waiting on it (actions_log rows with this
+// journal_id and disposition unknown): reconciled means the change is live, not_applied means
+// it never happened.
+async function settleActions(journalId, state) {
+  const rows = await db().select('actions_log', { where: { journal_id: Number(journalId), disposition: 'unknown' } }).catch(() => []);
+  for (const r of rows) {
+    const patch = state === 'reconciled'
+      ? { disposition: r.applied_by === 'optimizer' ? 'auto_applied' : 'applied_by_human', applied: true }
+      : { disposition: 'skipped', applied: false, close_reason: 'execution_needs_review' };
+    await db().update('actions_log', { id: r.id, disposition: 'unknown' }, patch).catch(() => {});
+  }
+  return rows.length;
 }
 
 // At boot: settle what can be settled by reading the account back. A status or budget write
@@ -77,16 +91,19 @@ export async function recoverWrites({ graph }) {
     }
     if (!state) { out.push({ id: row.id, resolved: false, state: row.state }); continue; }
     await db().update('write_journal', { id: row.id }, { state, receipt, updated_at: nowIso() });
-    out.push({ id: row.id, resolved: true, state });
+    const moves = await settleActions(row.id, state);
+    out.push({ id: row.id, resolved: true, state, moves });
   }
   return out;
 }
 
-// An operator checked Ads Manager and clears a held write by hand.
+// An operator checked Ads Manager and clears a held write by hand: the change is there (or
+// they made it by hand), so the moves waiting on it count as applied.
 export async function clearWrite(id, by) {
   const [row] = await db().select('write_journal', { where: { id: Number(id) } });
   if (!row) return { ok: false, error: `no write #${id}` };
   if (!OPEN.includes(row.state)) return { ok: false, error: `write #${id} is already ${row.state}` };
   await db().update('write_journal', { id: row.id }, { state: 'reconciled', receipt: { verification: 'cleared by operator', by }, updated_at: nowIso() });
-  return { ok: true };
+  const moves = await settleActions(row.id, 'reconciled');
+  return { ok: true, moves };
 }

@@ -177,7 +177,7 @@ export async function pixelHealth(days = 30) {
   const pixel = cfg.META_PIXEL_ID ? await graph(cfg.META_PIXEL_ID, { fields: 'name,last_fired_time,is_unavailable,creation_time' }).catch((e) => ({ error: String(e.message).slice(0, 160) })) : null;
   const rows = await graphAll(`${account()}/insights`, { level: 'account', time_range: range(days), fields: 'actions,conversions', filtering: scopeFilter() }, 10);
   const spec = metricSpec();
-  return { pixel, result_event: spec.result.event, result_action_types: spec.result.types, secondary_event: spec.secondary?.event || null, action_types_seen: actionTypesSeen(rows).slice(0, 40) };
+  return { pixel, result_event: spec.result.event, result_action_type: spec.result.type, secondary_event: spec.secondary?.event || null, action_types_seen: actionTypesSeen(rows).slice(0, 40) };
 }
 
 export async function pageOverview() {

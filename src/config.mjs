@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
+import { parseAmountText } from './money.mjs';
+import { eventProblem, ACTION_TYPE_SHAPE } from './events.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 // The raw .env text, kept so a value cut short by a # can be named (see dotenvProblems).
@@ -110,10 +112,17 @@ const dbUrl = () => z.string().trim().min(1).superRefine((v, ctx) => {
 export function dbUser(url) {
   try { return decodeURIComponent(new URL(url).username) || null; } catch { return null; }
 }
+// One Meta action type, like offsite_conversion.custom.1234567890: each event is counted as
+// exactly one type.
+const actionType = () => z.string().trim().optional().transform((v, ctx) => {
+  if (!v) return undefined;
+  if (!ACTION_TYPE_SHAPE.test(v)) { ctx.addIssue({ code: 'custom', message: 'must be one action type, like offsite_conversion.custom.1234567890 (one only, no commas or spaces)' }); return z.NEVER; }
+  return v;
+});
 const money = () => z.string().optional().transform((v, ctx) => {
   if (v == null || v.trim() === '') return undefined;
-  const n = Number(v.replace(/[\p{Sc},\s]/gu, ''));
-  if (!Number.isFinite(n) || n <= 0) { ctx.addIssue({ code: 'custom', message: 'must be a positive number' }); return z.NEVER; }
+  const n = parseAmountText(v);
+  if (n == null) { ctx.addIssue({ code: 'custom', message: /\d,\d{1,2}$|\d,\d{4,}/.test(v.trim()) ? 'must be a positive number with a decimal point (12.50, not 12,50); a comma only separates thousands' : 'must be a positive number' }); return z.NEVER; }
   return n;
 });
 const number = (fallback, { min = 0, max = Infinity } = {}) => z.string().optional().transform((v, ctx) => {
@@ -129,6 +138,10 @@ const clock = (fallback) => z.string().optional().transform((v, ctx) => {
   return { h, m, text: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}` };
 });
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+export const DEFAULT_META_API_VERSION = 'v27.0';
+// One of a few words, in any case.
+const oneOf = (words, fallback) => z.string().trim().toLowerCase().optional().transform((v) => v || fallback)
+  .refine((v) => words.includes(v), `must be one of ${words.join(', ')}`);
 const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
 // The settings a running agent cannot do without.
@@ -145,21 +158,22 @@ const schema = z.object({
   META_PAGE_ID: optionalDigits('Page'),
   META_PIXEL_ID: optionalDigits('dataset'),
   META_IG_USER_ID: optionalDigits('Instagram account'),
-  // 25, v25 and v25.0 all mean v25.0.
+  // 27, v27 and v27.0 all mean v27.0. Each Marketing API version works for about a year after
+  // the next one comes out (developers.facebook.com/docs/marketing-api/overview/versioning).
   META_API_VERSION: z.string().trim().optional().transform((v, ctx) => {
-    if (!v) return 'v25.0';
+    if (!v) return DEFAULT_META_API_VERSION;
     const m = v.match(/^v?(\d{1,3})(?:\.(\d))?$/i);
-    if (!m) { ctx.addIssue({ code: 'custom', message: 'must be a Graph API version like v25.0 (25 and v25 work too)' }); return z.NEVER; }
+    if (!m) { ctx.addIssue({ code: 'custom', message: 'must be a Graph API version like v27.0 (27 and v27 work too)' }); return z.NEVER; }
     return `v${m[1]}.${m[2] || '0'}`;
   }),
   CAMPAIGN_ALLOWLIST: campaignIds(),
   // What counts as a result
   RESULT_EVENT: text(),
   RESULT_LABEL: optionalText(),
-  RESULT_ACTION_TYPE: optionalText(),
+  RESULT_ACTION_TYPE: actionType(),
   SECONDARY_EVENT: optionalText(),
   SECONDARY_LABEL: optionalText(),
-  SECONDARY_ACTION_TYPE: optionalText(),
+  SECONDARY_ACTION_TYPE: actionType(),
   // Money
   TARGET_COST_PER_RESULT: money(),
   MAX_DAILY_BUDGET: money(),
@@ -177,7 +191,7 @@ const schema = z.object({
   ADMIN_SLACK_USER_IDS: memberIds(),
   // Database
   DATABASE_URL: dbUrl(),
-  DATABASE_SSL: z.enum(['auto', 'require', 'verify', 'disable']).optional().transform((v) => v || 'auto'),
+  DATABASE_SSL: oneOf(['auto', 'require', 'verify', 'disable'], 'auto'),
   DATABASE_SSL_CA: optionalText(),
   // Time and schedules
   TIMEZONE: timeZone(),
@@ -192,7 +206,7 @@ const schema = z.object({
   // Comment moderation
   MODERATION_ENABLED: bool(true),
   MODERATION_EVERY_MINUTES: number(60, { min: 10, max: 1440 }),
-  MODERATION_ACTION: z.enum(['hide', 'delete', 'flag']).optional().transform((v) => v || 'hide'),
+  MODERATION_ACTION: oneOf(['hide', 'delete', 'flag'], 'hide'),
   MODERATION_MIN_CONFIDENCE: number(0.7, { min: 0, max: 1 }),
   // Process
   PORT: number(3000, { min: 1, max: 65535 }),
@@ -240,6 +254,14 @@ export function parseConfig(env = process.env, { require = REQUIRED, dotenv = do
     const r = field.safeParse(raw === undefined || raw.trim() === '' ? undefined : raw);
     if (r.success) config[key] = r.data;
     else problems.push({ key, message: r.error.issues[0]?.message || 'is not valid' });
+  }
+  // A custom event has no action type of its own: it needs a custom conversion named in
+  // RESULT_ACTION_TYPE (or SECONDARY_ACTION_TYPE), so it is never counted as something else.
+  const named = new Set(problems.map((p) => p.key));
+  for (const which of ['RESULT', 'SECONDARY']) {
+    if (named.has(`${which}_EVENT`) || named.has(`${which}_ACTION_TYPE`)) continue;
+    const why = eventProblem(config[`${which}_EVENT`], config[`${which}_ACTION_TYPE`], which);
+    if (why) problems.push({ key: `${which}_ACTION_TYPE`, message: why });
   }
   return { config, problems };
 }

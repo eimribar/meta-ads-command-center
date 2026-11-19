@@ -32,21 +32,24 @@ export async function pullDaily(level, { since, until }, spec = metricSpec()) {
 
 // Re-pull the last `days` days at all three levels and store them, with today's budgets and
 // statuses on the ad set and campaign rows.
-export async function refreshPerformance(days = 10) {
+// Pull the window from Meta and store it, with today's budget snapshot. store:false pulls the
+// same numbers and returns them (as `fresh`) without writing anything: a dry run.
+export async function refreshPerformance(days = 10, { store = true } = {}) {
   const win = range(days);
   const spec = metricSpec();
   const pulled = rt.now().toISOString();
   const [ad, adset, campaign] = await Promise.all(['ad', 'adset', 'campaign'].map((l) => pullDaily(l, win, spec)));
   const rows = [...ad, ...adset, ...campaign].map((r) => ({ ...r, pulled_at: pulled }));
-  for (let i = 0; i < rows.length; i += 500) await db().upsert('performance_daily', rows.slice(i, i + 500), ['date', 'level', 'entity_id']);
   const live = await liveStructure();
+  if (!store) return { rows: rows.length, window: win, live, fresh: rows };
+  for (let i = 0; i < rows.length; i += 500) await db().upsert('performance_daily', rows.slice(i, i + 500), ['date', 'level', 'entity_id']);
   const day = today();
   const snap = [
     ...Object.entries(live.campaigns).map(([id, c]) => ({ date: day, level: 'campaign', entity_id: id, name: c.name, status: c.effective, daily_budget: c.daily_budget, pulled_at: pulled })),
     ...Object.entries(live.adsets).map(([id, s]) => ({ date: day, level: 'adset', entity_id: id, name: s.name, campaign_id: s.campaign_id, status: s.effective, daily_budget: s.daily_budget, pulled_at: pulled })),
   ];
   for (let i = 0; i < snap.length; i += 500) await db().upsert('performance_daily', snap.slice(i, i + 500), ['date', 'level', 'entity_id']);
-  return { rows: rows.length, window: win, live };
+  return { rows: rows.length, window: win, live, fresh: null };
 }
 
 // Stored rows for one level over a window.
