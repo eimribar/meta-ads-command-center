@@ -3,18 +3,20 @@
 // terminal, a brain card or an answer button), so a row that would be ignored is refused with
 // what was wrong, never saved. Every other row is free text the prompts read as it is.
 import { DEFAULTS, RANGES } from './optimizer/defaults.mjs';
+import { parseAmountText } from './money.mjs';
 
 export class BrainRowError extends Error {}
 
 const TERMINAL = 'From a terminal, wrap the text in single quotes: npm run cmd -- brain set policy/thresholds \'{"pause":{"zeroResultSpend":4}}\'.';
 const ONE_AT_A_TIME = 'Or change one number at a time: threshold pause.zeroResultSpend 4 (send `thresholds` to see them all).';
 
-// A target cost per result: a positive number. `1,250` and a currency symbol are accepted.
+// A target cost per result: a positive number. `1,250` and a currency symbol are accepted; a
+// comma is only a thousands separator, so `12,5` is refused instead of read as 125.
 export function parseTarget(v) {
   if (v == null) return null;
   if (typeof v === 'object' && !Array.isArray(v)) return parseTarget(v.value ?? v.target ?? v.amount);
-  const n = Number(String(v).replace(/[\p{Sc},\s]/gu, ''));
-  return Number.isFinite(n) && n > 0 ? n : null;
+  if (typeof v === 'number') return Number.isFinite(v) && v > 0 ? v : null;
+  return parseAmountText(v);
 }
 
 // Straight quotes for JSON typed on a phone or pasted from a document.
@@ -59,7 +61,7 @@ export function checkBrainRow(scope, key, content) {
   if (scope === 'policy') {
     if (key === 'target') {
       const n = parseTarget(content);
-      if (!n) throw new BrainRowError('policy/target must be a plain number in the ad account\'s currency, for example `brain set policy/target 150`. Nothing was saved.');
+      if (!n) throw new BrainRowError('policy/target must be a plain number in the ad account\'s currency, for example `brain set policy/target 150` (a decimal point, not a comma: 12.50). Nothing was saved.');
       return n;
     }
     if (key === 'thresholds') {

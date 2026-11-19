@@ -35,7 +35,7 @@ export function operatorOnlyMiddleware() {
     if (ack) await ack();
     const channel = body.channel?.id || body.container?.channel_id;
     if (client && channel && user) {
-      await client.chat.postEphemeral({ channel, user, text: 'Only the operators set in ADMIN_SLACK_USER_IDS can approve or change things.' }).catch(() => {});
+      await client.chat.postEphemeral({ channel, user, text: 'Only operators can approve or change things. To become one, ask whoever set up the agent to add you as an operator.' }).catch(() => {});
     }
   };
 }

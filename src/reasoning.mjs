@@ -3,8 +3,10 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getConfig } from './config.mjs';
 import { rt } from './runtime.mjs';
+import { redact } from './redact.mjs';
 
 const MIN_MAX_TOKENS = 32_000;   // adaptive thinking shares this budget with the answer
+const RETRY_MAX_TOKENS = 64_000; // one retry when a tool call was cut off at the limit
 
 function client() {
   if (!rt.anthropic) rt.anthropic = new Anthropic({ apiKey: getConfig().ANTHROPIC_API_KEY, maxRetries: 3 });
@@ -12,7 +14,6 @@ function client() {
 }
 
 const isLocal = (t) => !t.type || t.type === 'custom';
-const redactKeys = (s) => String(s).replace(/sk-ant-[A-Za-z0-9_-]+/g, '[hidden]').replace(/sk-[A-Za-z0-9_-]{20,}/g, '[hidden]');
 
 // system: string or list of strings. The first part is cached; later parts (live context) are not.
 export function requestBody({ system, messages, tools = [], maxTokens = 0, outputConfig = null, mustCall = null }) {
@@ -37,7 +38,8 @@ async function call(body) {
   const msg = await client().messages.stream(body).finalMessage();
   const u = msg.usage || {};
   console.log(`[claude] ${msg.model} in=${u.input_tokens || 0} cached=${u.cache_read_input_tokens || 0} out=${u.output_tokens || 0} stop=${msg.stop_reason}`);
-  if (msg.stop_reason === 'refusal') throw new Error('Claude declined this request');
+  // A refusal is an answer, not a failure: the caller says plainly that the request was declined.
+  if (msg.stop_reason === 'refusal') throw Object.assign(new Error('Claude declined this request'), { declined: true });
   return msg;
 }
 
@@ -61,15 +63,27 @@ export async function runTools({ system, messages, tools: given = [], maxIterati
   const local = new Map(tools.filter(isLocal).map((t) => [t.name, t]));
   const state = structuredClone(messages);
   const seen = new Set();
-  let last = null, nudged = false;
-  for (let n = 0; n < maxIterations; n++) {
-    try { last = await call(requestBody({ system, messages: state, tools, maxTokens, mustCall })); }
+  let last = null, nudged = false, budget = maxTokens, grown = false;
+  const ask = async () => {
+    try { return await call(requestBody({ system, messages: state, tools, maxTokens: budget, mustCall })); }
     catch (e) {
       if (e?.status !== 400 || !/web.?search/i.test(String(e?.message)) || !tools.some(isWebSearch)) throw e;
       webSearchRefused = true;
       tools = tools.filter((t) => !isWebSearch(t));
       console.warn('[claude] web search is turned off for this Anthropic organization; answering without it (set WEB_RESEARCH_ENABLED=false to stop offering it)');
-      last = await call(requestBody({ system, messages: state, tools, maxTokens, mustCall }));
+      return call(requestBody({ system, messages: state, tools, maxTokens: budget, mustCall }));
+    }
+  };
+  for (let n = 0; n < maxIterations; n++) {
+    last = await ask();
+    // A tool call cut off at the token limit has incomplete input: it is never run. One retry
+    // with more room; if that is cut off too, the turn fails with a plain reason.
+    if (last.stop_reason === 'max_tokens' && last.content?.some((b) => b.type === 'tool_use')) {
+      if (grown) throw new Error('Claude ran out of room before it finished a tool call; ask for less at once');
+      grown = true;
+      budget = Math.max(RETRY_MAX_TOKENS, maxTokens || 0);
+      last = await ask();
+      if (last.stop_reason === 'max_tokens' && last.content?.some((b) => b.type === 'tool_use')) throw new Error('Claude ran out of room before it finished a tool call; ask for less at once');
     }
     state.push({ role: 'assistant', content: last.content });
     if (last.stop_reason === 'pause_turn') continue;        // a server tool (web search) wants another turn
@@ -89,9 +103,10 @@ export async function runTools({ system, messages, tools: given = [], maxIterati
         if (n === maxIterations - 1) throw new Error('tool budget used up; not run');
         result = await t.run(t.parse ? t.parse(c.input) : c.input);
       } catch (e) {
-        result = { ok: false, error: redactKeys(e?.message || e).slice(0, 400) };
+        result = { ok: false, error: String(e?.message || e).slice(0, 400) };
       }
-      results.push({ type: 'tool_result', tool_use_id: c.id, content: typeof result === 'string' ? result : JSON.stringify(result ?? null) });
+      // Whatever a tool returned, tokens and keys never reach Claude (or, through it, Slack).
+      results.push({ type: 'tool_result', tool_use_id: c.id, content: redact(typeof result === 'string' ? result : JSON.stringify(result ?? null)) });
     }
     state.push({ role: 'user', content: results });
     if (done()) return { message: last, messages: state };

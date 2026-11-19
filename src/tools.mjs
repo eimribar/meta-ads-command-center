@@ -5,15 +5,11 @@ import * as read from './meta-read.mjs';
 import { graph, graphAll, pageToken } from './meta.mjs';
 import { getConfig } from './config.mjs';
 import { db } from './runtime.mjs';
-import { reportEffect, reportBlocked, currentExecution, withExecution } from './context.mjs';
-import { isOperator } from './auth.mjs';
-import { commentAction, sendMessage, commentContext, logModeration } from './meta-actions.mjs';
+import { reportEffect, reportBlocked, currentExecution } from './context.mjs';
 import { runModeration, moderationSummary, surfaces } from './moderation.mjs';
 import { buildScoreboard } from './scoreboard.mjs';
 import { proposeBrainUpdate, askTeam } from './agentic.mjs';
 import { ACTION_TYPES } from './optimizer/policy.mjs';
-import { timeline } from './jobs.mjs';
-import { money } from './money.mjs';
 
 const days = (def, max = 30) => z.number().int().min(1).max(max).default(def);
 const campaignArg = z.string().nullable().default(null).describe('a campaign name, part of a name, or id; null for everything in scope');
@@ -23,6 +19,25 @@ async function campaignId(text) {
   const c = await read.resolveCampaign(text);
   if (!c) throw new Error(`no campaign matched "${text}"`);
   return c.id;
+}
+
+// graph_query reads, never writes, and never reaches a token. A path is ids and edge names
+// only; any field or parameter that names a token is refused; parameters that would turn a GET
+// into a write (method, batch) or carry credentials are dropped.
+const DROPPED_PARAMS = new Set(['method', '_method', 'batch', 'access_token', 'appsecret_proof', 'appsecret_time']);
+export function graphQueryArgs(path, fields, params = {}) {
+  const p = String(path || '').trim().replace(/^\/+/, '').replace(/\/+$/, '');
+  if (!p || !/^[A-Za-z0-9_./-]+$/.test(p) || p.includes('..') || /^v\d+(\.\d+)?\//.test(p) || /token|oauth|debug|^me\/accounts|\/accounts$|^https?/i.test(p)) {
+    throw new Error('that path is not available here: give a node id and an edge, like <ad_id>/insights');
+  }
+  const q = {};
+  for (const [k, v] of Object.entries(params || {})) {
+    if (DROPPED_PARAMS.has(k.toLowerCase())) continue;
+    q[k] = v;
+  }
+  if (fields) q.fields = fields;
+  if (/token/i.test(String(q.fields ?? '')) || Object.keys(q).some((k) => /token/i.test(k))) throw new Error('fields that hold tokens are not available here');
+  return { p, q };
 }
 
 // ── read tools ─────────────────────────────────────────────────────────────
@@ -54,12 +69,9 @@ export function readTools() {
         campaign: campaignArg, fields: z.string().nullable().default(null),
       }), run: (args) => read.runInsights(args) }),
     tool({ name: 'graph_query', description: 'Read anything else in the Meta Graph API the token can reach: a node or edge, with fields and parameters. GET only.',
-      input: z.object({ path: z.string().describe('for example "<ad_id>/insights" or "<page_id>/posts"'), fields: z.string().nullable().default(null), params: z.record(z.string(), z.any()).default({}), paginate: z.boolean().default(false) }),
+      input: z.object({ path: z.string().max(200).describe('for example "<ad_id>/insights" or "<page_id>/posts"'), fields: z.string().max(1000).nullable().default(null), params: z.record(z.string(), z.any()).default({}), paginate: z.boolean().default(false) }),
       run: async ({ path, fields, params, paginate }) => {
-        const p = String(path).replace(/^\/+/, '');
-        if (/access_token|debug_token|oauth/i.test(p)) throw new Error('that path is not available');
-        const q = { ...params, ...(fields ? { fields } : {}) };
-        delete q.access_token;
+        const { p, q } = graphQueryArgs(path, fields, params);
         return paginate ? { data: await graphAll(p, q, 300) } : graph(p, q);
       } }),
     tool({ name: 'ad_creative', description: 'What an ad shows: its text, headline, call to action, link, image or video, post id, and a shareable preview link.',
@@ -89,7 +101,7 @@ export function readTools() {
     tool({ name: 'inbox', description: 'The Page inbox (Messenger or Instagram): recent conversations, or one full conversation by id. Read a thread before replying to it.',
       input: z.object({ platform: z.enum(['facebook', 'instagram']).default('facebook'), conversation_id: z.string().nullable().default(null), limit: z.number().int().min(1).max(25).default(10) }),
       run: ({ platform, conversation_id, limit }) => (conversation_id ? read.conversation(conversation_id, limit) : read.inbox(platform, limit)) }),
-    tool({ name: 'creative_scoreboard', description: 'Every ad that spent in the window ranked against the target with a verdict (winning, on track, behind, losing, too early).',
+    tool({ name: 'creative_scoreboard', description: 'The ads that spent most in the window (up to 30), ranked against the target with a verdict (winning, on track, behind, losing, too early).',
       input: z.object({ days: days(7) }), run: ({ days: d }) => buildScoreboard({ days: d, limit: 30 }) }),
     tool({ name: 'query_history', description: `The agent's own records (not live Meta): ${HISTORY_TABLES.join(', ')}. Past proposals and the team's decisions are in actions_log.`,
       input: z.object({ table: z.enum(HISTORY_TABLES), where: z.record(z.string(), z.any()).default({}).describe('column to value, or {"gte": value} style operators'), order: z.string().nullable().default(null), limit: z.number().int().min(1).max(200).default(25) }),
@@ -102,57 +114,24 @@ export function readTools() {
 // ── write tools (operators only) ───────────────────────────────────────────
 export function writeTools() {
   return [
-    tool({ name: 'execute_order', description: 'An operator\'s explicit order, done now: set_status (pause or activate a campaign, ad set or ad), set_budget (daily budget on a campaign or ad set, in the ad account currency), or duplicate_campaign (copied PAUSED; activate only if they said so). The daily budget ceiling applies to every order.',
+    tool({ name: 'execute_order', description: 'An operator\'s explicit order: set_status (pause or activate a campaign, ad set or ad), set_budget (daily budget on a campaign or ad set, in the ad account currency), or duplicate_campaign (copied PAUSED; activate only if they said so). It posts a card that names the exact change; the change is made only when an operator taps Confirm on it. The daily budget ceiling applies to every order.',
       input: z.object({
         op: z.enum(['set_status', 'set_budget', 'duplicate_campaign']),
         level: z.enum(['campaign', 'adset', 'ad']).nullable().default(null),
-        target_id: z.string().nullable().default(null),
+        target_id: z.string().max(64).nullable().default(null),
         status: z.enum(['ACTIVE', 'PAUSED']).nullable().default(null),
         daily_budget: z.number().positive().nullable().default(null).describe('the daily budget in the ad account\'s currency, for example 150'),
-        source_campaign_id: z.string().nullable().default(null),
-        name_suffix: z.string().default('copy'),
+        source_campaign_id: z.string().max(64).nullable().default(null),
+        name_suffix: z.string().max(60).default('copy'),
         include_paused_ads: z.boolean().default(false),
         activate: z.boolean().default(false),
       }),
-      run: async (o) => {
-        const ex = currentExecution();
-        if (!isOperator(ex?.actor)) { reportBlocked('execute_order', 'not an operator'); return { ok: false, refused: 'direct orders are for operators only; file a proposal instead' }; }
-        const w = await import('./meta-write.mjs');
-        try {
-          const r = await withExecution({ kind: 'order', key: `order:${ex.key}:${JSON.stringify(o)}` }, async () => {
-            // Each order is read back from Meta after the write and kept with the operator's words.
-            const record = (result) => timeline('order', { op: o.op, level: o.level, target_id: o.target_id || o.source_campaign_id, words: ex.words || null, by: ex.actor, result });
-            if (o.op === 'set_status') {
-              if (!o.level || !o.target_id || !o.status) throw new Error('set_status needs level, target_id and status');
-              const before = await w.currentState(o.level, o.target_id).catch(() => null);
-              const res = await w.setStatus(o.level, o.target_id, o.status);
-              const after = await w.currentState(o.level, o.target_id).catch(() => null);
-              reportEffect('execute_order', [o.target_id], `${o.status === 'PAUSED' ? 'paused' : 'activated'} ${o.level} ${before?.name || o.target_id}`);
-              await record({ before: before?.status ?? null, after: after?.status ?? null });
-              return { ...res, before: before?.status ?? null, read_back: after ? { status: after.status, configured: after.configured } : 'could not read back' };
-            }
-            if (o.op === 'set_budget') {
-              if (!o.level || !o.target_id || !o.daily_budget) throw new Error('set_budget needs level, target_id and daily_budget');
-              const res = await w.setBudget(o.level, o.target_id, o.daily_budget);
-              const after = await w.currentState(o.level, o.target_id).catch(() => null);
-              reportEffect('execute_order', [o.target_id], `set the daily budget of ${o.level} ${after?.name || o.target_id} from ${res.before != null ? money(res.before) : '?'} to ${money(o.daily_budget)}`);
-              await record({ before: res.before, after: after?.dailyBudget ?? null });
-              return { ...res, read_back: after ? { daily_budget: after.dailyBudget } : 'could not read back' };
-            }
-            if (!o.source_campaign_id) throw new Error('duplicate_campaign needs source_campaign_id');
-            const res = await w.duplicateCampaign(o);
-            await record({ campaign_id: res.campaignId, adsets: res.adsets.length, activated: Boolean(res.activated), partial: Boolean(res.partial) });
-            reportEffect('execute_order', [res.campaignId], `duplicated campaign ${o.source_campaign_id} as ${res.campaignId} (${res.activated ? 'active' : 'paused'}${res.partial ? ', INCOMPLETE' : ''})`);
-            return res;
-          });
-          return { ok: true, ...r };
-        } catch (e) {
-          reportBlocked('execute_order', e.message);
-          return { ok: false, error: String(e.message).slice(0, 300) };
-        }
+      run: async ({ op, ...params }) => {
+        const { fileOrder } = await import('./orders.mjs');
+        return fileOrder(op, params);
       } }),
     tool({ name: 'file_proposal', description: 'File your own recommended move as an approve or reject card. It runs the optimizer\'s gate and guardrails and posts the card itself. Moves: pause_ad, unpause_ad (ad ids), scale_budget, descale_budget (ad set or campaign ids).',
-      input: z.object({ proposals: z.array(z.object({ action_type: z.enum(ACTION_TYPES), target_id: z.string(), reason: z.string() })).min(1).max(10) }),
+      input: z.object({ proposals: z.array(z.object({ action_type: z.enum(ACTION_TYPES), target_id: z.string().max(64), reason: z.string().max(2000) })).min(1).max(10) }),
       run: async ({ proposals }) => {
         const { fileProposals } = await import('./optimizer/optimizer.mjs');
         const { postCards } = await import('./slack/approvals.mjs');
@@ -164,37 +143,29 @@ export function writeTools() {
         for (const r of results.filter((x) => !x.ok)) reportBlocked('file_proposal', `${r.key || ''} ${r.blocked}: ${r.why || r.reason || r.detail || ''}`.trim());
         return results.map((r) => (r.ok ? { ok: true, action_id: r.row.id, disposition: r.row.disposition } : { ok: false, blocked: r.blocked, why: r.why || r.reason || r.detail, action_id: r.action_id || null }));
       } }),
-    tool({ name: 'comment_action', description: 'Reply to, hide, unhide or delete a comment on the Page or Instagram. Public. Show the exact text or action first; set confirm:true only after a person approved it in this conversation.',
-      input: z.object({ platform: z.enum(['facebook', 'instagram']).default('facebook'), comment_id: z.string(), action: z.enum(['reply', 'hide', 'unhide', 'delete']), message: z.string().nullable().default(null), confirm: z.boolean().default(false) }),
+    tool({ name: 'comment_action', description: 'Reply to, hide, unhide or delete a comment on the Page or Instagram. Public. It posts a card with the exact action and text; it happens only when an operator taps Confirm on it.',
+      input: z.object({ platform: z.enum(['facebook', 'instagram']).default('facebook'), comment_id: z.string().max(80), action: z.enum(['reply', 'hide', 'unhide', 'delete']), message: z.string().max(2500).nullable().default(null) }),
       run: async (args) => {
-        const ctx = args.confirm ? await commentContext(args.platform, args.comment_id) : {};
-        const r = await commentAction(args);
-        if (r.ok) {
-          reportEffect('comment_action', [args.comment_id], `${args.action} on comment ${args.comment_id}`);
-          await logModeration({ platform: args.platform, comment_id: args.comment_id, author: ctx.user, text: ctx.text, action: args.action, outcome: 'done', source: `chat:${currentExecution()?.actor || ''}` });
-        } else if (args.confirm) reportBlocked('comment_action', r.error);
-        return r;
+        const { fileOrder } = await import('./orders.mjs');
+        return fileOrder('comment', args);
       } }),
-    tool({ name: 'send_dm', description: 'Reply to a person who messaged the Page (Messenger or Instagram), within Meta\'s 24 hour window. Show the exact text first; set confirm:true only after a person approved it in this conversation.',
-      input: z.object({ platform: z.enum(['facebook', 'instagram']).default('facebook'), recipient_id: z.string(), text: z.string(), confirm: z.boolean().default(false) }),
+    tool({ name: 'send_dm', description: 'Reply to a person who messaged the Page (Messenger or Instagram), within Meta\'s 24 hour window. It posts a card with the exact text; it is sent only when an operator taps Confirm on it.',
+      input: z.object({ platform: z.enum(['facebook', 'instagram']).default('facebook'), recipient_id: z.string().max(80), text: z.string().max(2000) }),
       run: async (args) => {
-        const r = await sendMessage(args);
-        if (r.ok) reportEffect('send_dm', [args.recipient_id], `sent a DM to ${args.recipient_id}`);
-        else if (args.confirm) reportBlocked('send_dm', r.error);
-        return r;
+        const { fileOrder } = await import('./orders.mjs');
+        return fileOrder('dm', args);
       } }),
-    tool({ name: 'scan_comments', description: 'Run the comment sweep now. apply:false previews without acting.',
-      input: z.object({ apply: z.boolean().default(false) }),
-      run: async ({ apply }) => {
-        const r = await runModeration({ act: apply });
-        if (apply) reportEffect('scan_comments', [], `comment sweep: ${r.hidden.length} hidden, ${r.deleted.length} deleted, ${r.flagged.length} flagged`);
-        return { summary: moderationSummary(r), scanned: r.scanned, hidden: r.hidden.length, deleted: r.deleted.length, flagged: r.flagged.length };
+    tool({ name: 'scan_comments', description: 'Preview the comment sweep now: what it would hide, delete or flag. It changes nothing; the hourly sweep acts on its own rules.',
+      input: z.object({}),
+      run: async () => {
+        const r = await runModeration({ act: false });
+        return { summary: moderationSummary(r), scanned: r.scanned, would_hide: r.hidden.length, would_delete: r.deleted.length, would_flag: r.flagged.length, note: 'preview only; nothing was changed' };
       } }),
     tool({ name: 'propose_brain_update', description: 'Propose adding or correcting a brain row (a business fact, policy or preference). Posts a card an operator applies.',
-      input: z.object({ scope: z.string(), key: z.string(), content: z.any(), why: z.string() }),
+      input: z.object({ scope: z.string().max(64), key: z.string().max(64), content: z.any(), why: z.string().max(2000) }),
       run: async (args) => { const r = await proposeBrainUpdate(args); reportEffect('propose_brain_update', [], `proposed brain row ${args.scope}/${args.key}`); return r; } }),
     tool({ name: 'ask_team', description: 'Ask the team a question only they can answer, with up to 4 answer buttons. The answer is saved to the brain under answers/<key>.',
-      input: z.object({ question: z.string(), key: z.string(), options: z.array(z.string()).max(4).default([]) }),
+      input: z.object({ question: z.string().max(1000), key: z.string().max(64).regex(/^[A-Za-z0-9_.-]+$/, 'letters, digits, dot, dash or underscore'), options: z.array(z.string().max(70)).max(4).default([]) }),
       run: async (args) => { const r = await askTeam(args); reportEffect('ask_team', [], `asked the team: ${args.question.slice(0, 60)}`); return r; } }),
   ];
 }

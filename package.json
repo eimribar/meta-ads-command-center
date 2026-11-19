@@ -27,8 +27,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",
-    "@slack/bolt": "^3.22.0",
-    "@slack/web-api": "^6.13.0",
+    "@slack/bolt": "^5.1.0",
+    "@slack/web-api": "^8.4.0",
     "dotenv": "^16.6.1",
     "pg": "^8.13.1",
     "zod": "^4.6.7"

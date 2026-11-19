@@ -3,16 +3,17 @@
 import http from 'node:http';
 import { getConfig } from './config.mjs';
 import { healthHttp, SOCKET_EVENTS } from './health.mjs';
+import { isReconnectNoise, slackStartProblem } from './slack/problems.mjs';
 
 const state = { slack: 'starting', started_at: new Date().toISOString() };
 const line = (e) => String(e?.message || e).split('\n')[0].slice(0, 300);
 
-// A Socket Mode reconnect race can throw outside any handler; it is harmless, so it is logged
-// and the process keeps running. Anything else stops the process with one plain line, so a
+// While the Socket Mode connection is being replaced, a send or an ack can fail outside any
+// handler; the client reconnects on its own, so these are logged and the process keeps running
+// (see slack/problems.mjs). Anything else stops the process with one plain line, so a
 // supervisor restarts it. DEBUG=1 prints the full stack as well.
-const BENIGN = /server explicit disconnect|Unhandled event .* in state|socket hang up/i;
 const fatal = (kind) => (e) => {
-  if (BENIGN.test(String(e?.message || e))) { console.warn('[slack] reconnect noise:', line(e).slice(0, 120)); return; }
+  if (isReconnectNoise(e)) { console.warn('[slack] reconnecting:', line(e).slice(0, 120)); return; }
   console.error(`[fatal] ${kind}: ${line(e)}`);
   if (process.env.DEBUG) console.error(e);
   process.exit(1);
@@ -53,21 +54,24 @@ for (const r of recovered) console.log(`[journal] write #${r.id}: ${r.resolved ?
 
 // ── Slack ──
 // Both tokens are tried first, so a wrong one gives one plain line instead of a stack trace.
+// A refusal (an error code from Slack) and no answer at all (no network, DNS, a proxy) are
+// different problems with different fixes.
 const { WebClient } = await import('@slack/web-api');
-const slackErr = (e) => e?.data?.error || line(e);
 try { await new WebClient(cfg.SLACK_BOT_TOKEN, { retryConfig: { retries: 1 }, logLevel: 'error' }).auth.test(); }
-catch (e) { stop(`[slack] Slack refused the bot token (${slackErr(e)}). Check SLACK_BOT_TOKEN: the Bot User OAuth Token (xoxb-) from OAuth & Permissions.`); }
+catch (e) { stop(slackStartProblem(e, 'bot')); }
 try { await new WebClient(cfg.SLACK_APP_TOKEN, { retryConfig: { retries: 1 }, logLevel: 'error' }).apps.connections.open(); }
-catch (e) { stop(`[slack] Slack refused the app level token (${slackErr(e)}). Check SLACK_APP_TOKEN: an App-Level Token (xapp-) with connections:write, and Socket Mode turned on.`); }
+catch (e) { stop(slackStartProblem(e, 'app')); }
 
 const { createSlackApp } = await import('./slack/app.mjs');
-const { app, socket } = await createSlackApp();
+let app, socket;
+try { ({ app, socket } = await createSlackApp()); }
+catch (e) { stop(slackStartProblem(e, 'connect')); }
 for (const [event, s] of Object.entries(SOCKET_EVENTS)) {
   socket?.on?.(event, () => { state.slack = s; if (event !== 'connecting') console.log(`[slack] ${event}`); });
 }
 state.slack = 'connecting';
 try { await app.start(); }
-catch (e) { stop(`[slack] could not connect: ${slackErr(e)}.`); }
+catch (e) { stop(slackStartProblem(e, 'connect')); }
 state.slack = 'connected';
 console.log('[slack] connected (Socket Mode)');
 

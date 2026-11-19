@@ -4,27 +4,8 @@ import { handleCommand } from '../src/slack/commands.mjs';
 import { registerApprovals, postCards } from '../src/slack/approvals.mjs';
 import { setRuntime } from '../src/runtime.mjs';
 import { getBrain } from '../src/brain.mjs';
-import { setup } from './helpers.mjs';
+import { setup, fakeSlack, fakeApp } from './helpers.mjs';
 import { fakeAccount } from './account-fake.mjs';
-
-// A stand-in for the Slack Web API that records every call.
-function fakeSlack() {
-  const calls = [];
-  let ts = 1000;
-  const rec = (name) => async (args) => { calls.push({ name, args }); return { ok: true, ts: String(ts++), channel: args?.channel || 'CTEST' }; };
-  return {
-    calls,
-    chat: { postMessage: rec('chat.postMessage'), update: rec('chat.update'), postEphemeral: rec('chat.postEphemeral') },
-    pins: { add: rec('pins.add'), remove: rec('pins.remove') },
-    views: { open: rec('views.open'), publish: rec('views.publish') },
-  };
-}
-
-// A stand-in for a Bolt app: collects the handlers so the test can fire them.
-function fakeApp() {
-  const actions = {}, views = {};
-  return { actions, views, action: (id, fn) => { actions[id] = fn; }, view: (id, fn) => { views[id] = fn; } };
-}
 
 const say = () => { const out = []; return { out, reply: async (p) => { out.push(typeof p === 'string' ? p : p.text); return { ts: '1', channel: 'C' }; } }; };
 const noJobs = { report: async () => {}, optimize: async () => {}, moderation: async () => {} };

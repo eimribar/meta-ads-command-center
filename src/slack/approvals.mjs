@@ -1,7 +1,8 @@
 // Approve and reject: the cards, the "why" modal, approve-all for the non-budget moves, and the
 // brain and ask-team buttons.
 import { rt, db } from '../runtime.mjs';
-import { approvalBlocks, batchHeaderBlocks, decisionModal, doneBlocks, BATCH_SAFE } from './cards.mjs';
+import { approvalBlocks, batchHeaderBlocks, decisionModal, doneBlocks, orderDoneBlocks, BATCH_SAFE } from './cards.mjs';
+import { confirmOrder, cancelOrder, describeOrder } from '../orders.mjs';
 import { applyApproved, rejectCard, describeDecided } from '../optimizer/executor.mjs';
 import { postToDesk, updateDesk } from './desk.mjs';
 import { getState, setState } from '../jobs.mjs';
@@ -107,6 +108,25 @@ export function registerApprovals(app) {
     await client.chat.postMessage({ channel: body.channel?.id, thread_ts: body.message?.ts, text: `:white_check_mark: ${ok} of ${rows.length} applied by ${mention(user)}${fails.length ? `\n:warning: ${fails.join('\n')}` : ''}` }).catch(() => {});
     await updateDesk(client).catch(() => {});
   });
+
+  // order cards: Confirm carries the order out once, as the operator who tapped
+  const onOrder = (decide) => async ({ ack, body, action, client }) => {
+    await ack();
+    const user = who(body);
+    const channel = body.channel?.id, ts = body.message?.ts;
+    let r;
+    try {
+      const { id } = JSON.parse(action.value);
+      r = await decide(id, { by: user });
+    } catch (e) { r = { ok: false, line: `Not done: ${String(e?.message || e).slice(0, 200)}` }; }
+    const icon = r.ok ? ':white_check_mark:' : r.unknown ? '' : r.decided ? ':information_source:' : ':warning:';
+    const status = `${icon ? `${icon} ` : ''}${r.decided ? r.line : `${r.line}${r.order ? ` (${mention(user)})` : ''}`}`;
+    if (channel && ts && r.order) {
+      await client.chat.update({ channel, ts, text: status.replace(/[:*_`]/g, '').slice(0, 150), blocks: orderDoneBlocks(describeOrder(r.order), status) }).catch(() => {});
+    } else if (channel) await client.chat.postMessage({ channel, ...(ts ? { thread_ts: ts } : {}), text: status }).catch(() => {});
+  };
+  app.action('order_confirm', onOrder(confirmOrder));
+  app.action('order_cancel', onOrder(cancelOrder));
 
   // brain update cards
   app.action('brain_apply', async ({ ack, body, action, client }) => {

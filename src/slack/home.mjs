@@ -27,7 +27,7 @@ export async function buildHome(userId) {
   ]);
   const spend = rows.reduce((s, r) => s + Number(r.spend || 0), 0);
   const results = rows.reduce((s, r) => s + Number(r.results || 0), 0);
-  const sec = (text) => ({ type: 'section', text: { type: 'mrkdwn', text } });
+  const sec = (text) => ({ type: 'section', text: { type: 'mrkdwn', text: String(text).length > 3000 ? `${String(text).slice(0, 2997)}...` : String(text) } });
   const blocks = [
     { type: 'header', text: { type: 'plain_text', text: 'Ads Command Center' } },
     sec(`*Last 7 days (stored)*: ${fmt(spend)} spent · ${results} ${spec.result.label}${results ? ` at ${fmt(spend / results)} each` : ''}\n*Target*: ${p.target ? fmt(p.target) : 'not set'} per ${spec.result.label} · *Daily ceiling*: ${p.maxDailyBudget ? fmt(p.maxDailyBudget) : 'not set'}`),

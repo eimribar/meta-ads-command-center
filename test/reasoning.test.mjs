@@ -32,7 +32,7 @@ test('tools run locally; errors go back to Claude with keys hidden', async () =>
   assert.equal(r.message.content[0].text, 'done');
   const results = requests.slice(1).map((q) => q.messages.at(-1).content[0].content);
   assert.deepEqual(JSON.parse(results[0]), { doubled: 4 });
-  assert.match(results[1], /\[hidden\]/);
+  assert.match(results[1], /\[hidden key\]/);
   assert.ok(!results[1].includes('sk-ant'));
   assert.match(results[2], /"ok":false/);
 });
@@ -63,4 +63,35 @@ test('pause_turn from a server tool continues the loop', async () => {
   const r = await runTools({ system: 's', messages: [{ role: 'user', content: 'go' }], tools: [{ type: 'web_search_20260209', name: 'web_search' }] });
   assert.equal(requests.length, 2);
   assert.equal(r.message.content[0].text, 'answer');
+});
+
+test('a token in any tool result is hidden before it reaches Claude', async () => {
+  setup();
+  const meta = 'EAA' + 'B'.repeat(40);
+  const leaky = tool({ name: 'leaky', description: '', input: z.object({}), run: async () => ({ data: [{ id: '1', access_token: meta, note: `${['xoxb', '123', 'abc'].join('-')} and postgres://u:pw@h/db` }] }) });
+  const requests = fakeClaude([toolUse('t1', 'leaky', {}), text('ok')]);
+  await runTools({ system: 's', messages: [{ role: 'user', content: 'go' }], tools: [leaky] });
+  const sent = requests[1].messages.at(-1).content[0].content;
+  assert.ok(!sent.includes(meta) && !sent.includes('xoxb-123') && !sent.includes('pw@h'), sent);
+  assert.match(sent, /\[hidden token\][\s\S]*\[connection string\]/);
+});
+
+test('a refusal is a plain decline, not an error', async () => {
+  setup();
+  fakeClaude([{ content: [], stop_reason: 'refusal' }]);
+  await assert.rejects(() => runTools({ system: 's', messages: [{ role: 'user', content: 'go' }], tools: [] }), (e) => e.declined === true);
+});
+
+test('a tool call cut off at the token limit is never run; one retry with more room', async () => {
+  setup();
+  const ran = [];
+  const act = tool({ name: 'act', description: '', input: z.object({ x: z.number() }), run: async ({ x }) => { ran.push(x); return 'ok'; } });
+  const cut = { content: [{ type: 'tool_use', id: 't1', name: 'act', input: { x: 1 } }], stop_reason: 'max_tokens' };
+  let requests = fakeClaude([cut, toolUse('t2', 'act', { x: 2 }), text('done')]);
+  await runTools({ system: 's', messages: [{ role: 'user', content: 'go' }], tools: [act] });
+  assert.deepEqual(ran, [2], 'the cut-off call never ran');
+  assert.ok(requests[1].max_tokens > requests[0].max_tokens, 'the retry has more room');
+  requests = fakeClaude([cut, cut]);
+  await assert.rejects(() => runTools({ system: 's', messages: [{ role: 'user', content: 'go' }], tools: [act] }), /ran out of room/);
+  assert.deepEqual(ran, [2]);
 });
