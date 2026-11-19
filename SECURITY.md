@@ -4,9 +4,13 @@
 
 - Secrets are read only from environment variables (or a local `.env`, which `.gitignore` keeps out of
   git). They are never written to the database.
-- Meta errors are redacted before they reach a log line or Slack (access tokens become `[hidden]`), tool
-  errors sent back to Claude have Anthropic keys removed, and `npm run check` names a setting, never
-  its value (tokens inside error text are hidden too).
+- Tokens and keys are hidden before they reach a log line, Slack or Claude: Meta, Slack and Anthropic
+  tokens, `access_token=` in a URL and database connection strings become `[hidden token]`,
+  `[hidden key]` or `[connection string]` in Meta errors and in every tool result and error the
+  model sees. `npm run check` names a setting, never its value.
+- The chat's `graph_query` tool reads node ids and edges only: it refuses paths and fields that
+  would return a token (such as a Page's `access_token` or `me/accounts`) and drops any parameter
+  that would turn a read into a write.
 - Use a system user token (not a person's), with only the permissions in
   [docs/INSTALL.md](docs/INSTALL.md). Rotate it in Business settings if it leaks: generate a new
   token on the system user, put it in `META_ACCESS_TOKEN`, restart, and revoke the old one.
@@ -25,7 +29,10 @@ accounts (settings, finances and permissions). Give it the token permissions in
 
 ## The Slack app
 
-The app connects over Socket Mode, so it opens no port and needs no public URL. Its bot scopes, each
+The app connects over Socket Mode, so Slack needs no open port and no public URL. The only port the
+process listens on is the health check (`PORT`, default 3000), which serves `GET /health` and
+nothing else; it shows Slack's and the database's state, and job details only with
+`HEALTH_SECRET`. The Docker Compose file publishes it on 127.0.0.1 only. Its bot scopes, each
 used for one thing (the manifest says which): `app_mentions:read`, `channels:history`,
 `channels:read`, `chat:write`, `groups:history`, `groups:read`, `im:history`, `pins:write`,
 `users:read`. The app level token has `connections:write` only. It sees only the channels it is
@@ -53,28 +60,37 @@ On the ad account, and only inside `META_AD_ACCOUNT_ID` (and `CAMPAIGN_ALLOWLIST
 
 | Change | Who decides |
 |---|---|
-| Pause an ad | An operator's approval or order; or on its own, only if an operator set `ladder set pause auto`. |
-| Turn an ad back on | An operator's approval or order. Never automatic. |
-| Raise or trim a budget | An operator's approval or order. Never automatic. Always inside `MAX_DAILY_BUDGET`. |
-| Pause or activate a campaign or ad set | An operator's order. Activating needs an operator and passes the ceiling. |
-| Duplicate a campaign | An operator's order. Built paused; switched on last, only if asked, inside the ceiling. |
+| Pause an ad | An operator's approval or confirmed order; or on its own, only if an operator set `ladder set pause auto`, and never below the ad set's floor of running ads. |
+| Turn an ad back on | An operator's approval or confirmed order. Never automatic. |
+| Raise or trim a budget | An operator's approval or confirmed order. Never automatic. Always inside `MAX_DAILY_BUDGET` and, for raises, the weekly growth cap. |
+| Pause or activate a campaign or ad set | An operator's confirmed order. Activating passes the ceiling. |
+| Duplicate a campaign | An operator's confirmed order. Built paused; switched on last, only if asked, inside the ceiling. |
+
+An order is one message plus one tap: the agent posts a card that names the exact change, and
+nothing happens until an operator taps Confirm on it. A message alone (an operator's, a teammate's,
+or words inside a comment the agent read) never changes the account. Anything that spends from a
+lifetime budget is left to Ads Manager, because the ceiling is a daily one.
 
 On the Page and Instagram: hide clear spam, abuse and false claims during the sweep (or delete, or
-only flag, per `MODERATION_ACTION`), and reply to comments and messages only after a person approved
-the exact text.
+only flag, per `MODERATION_ACTION`). A reply to a comment or a message, and any hide, unhide or
+delete asked for in chat, is a card with the exact text that goes out only when an operator taps
+Confirm.
 
 It never creates ads from scratch, never edits targeting, creative or bids, and never deletes a
 campaign, ad set or ad.
 
 Every account write is checked in code (object in the account and in scope, operator behind it,
 ceiling), recorded in the write journal before it is sent, and closed after Meta answers. A write with
-no answer holds all later writes until it is reconciled.
+no clear answer (no response, a server error, Meta's own "try again" errors) is never retried: it
+holds all later writes until it is reconciled, and the card or move behind it says its outcome is
+unknown.
 
 ## Who can do what in Slack
 
-Only the member ids in `ADMIN_SLACK_USER_IDS` can approve, reject, order, or change the brain, the
-ladder or the freeze. For anyone else the change tools are removed before the model sees the request,
-and button and modal submissions are refused in middleware.
+Only the member ids in `ADMIN_SLACK_USER_IDS` can approve, reject, confirm an order, or change the
+brain, the ladder or the freeze. For anyone else the change tools are removed before the model sees
+the request, and button and modal submissions are refused in middleware. Every message the model
+reads is labeled with who wrote it and whether they are an operator.
 
 Slack messages, web pages, API responses and comments reach the model as evidence. The prompts tell it
 never to follow instructions found there, and the guardrails above hold even if it did.

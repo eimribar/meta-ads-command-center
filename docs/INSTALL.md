@@ -18,11 +18,13 @@ optimizer off and every budget change refused, and the check's last line says so
 You need Node 22 or newer (`node --version`), or Docker.
 
 ```bash
-git clone <this repository> meta-ads-command-center
+git clone https://github.com/eimribar/meta-ads-command-center.git
 cd meta-ads-command-center
 npm install
 cp .env.example .env
 ```
+
+If your team keeps its own copy of the repository (a fork), clone that URL instead.
 
 Fill `.env` as you go through the next steps. Write values without quotes, and never use `#` in a
 value: in `.env` an unquoted `#` starts a comment and cuts the value off (the check says when that
@@ -83,8 +85,10 @@ Create the tables:
 npm run db:setup
 ```
 
-It prints `Created 14 tables; all 14 are ready`, and is safe to run again. `npm start` also creates
-any missing table on its own.
+It prints `Created 14 tables; all 14 are ready (SSL: disable).` (with your SSL mode), and is safe to
+run again: the second time it prints `All 14 tables were already there; nothing changed`. `npm start`
+also creates any missing table on its own. On a database from an older version, both add what the
+new version needs (a column, an index) and name it.
 
 **When a database admin creates the tables** instead (for example your team runs
 [`db/schema.sql`](../db/schema.sql) with its own tools, and the agent's user may not create tables),
@@ -221,14 +225,21 @@ optional can stay missing. The token is shown once: copy it into
 **3.6 The result** (from whoever owns the ad budget). In Events Manager, find the event that counts
 as a result for you: `Purchase` for a store, `Lead` for a lead form, `Schedule` for a booked call or
 visit, `CompleteRegistration` for a signup. Put its name in `RESULT_EVENT` and your team's word for
-it in `RESULT_LABEL`. A second event you watch goes in `SECONDARY_EVENT`. The check reads the last
-30 days and tells you which action type it will count, or lists what the account did report if the
-name does not match.
+it in `RESULT_LABEL`. A second event you watch goes in `SECONDARY_EVENT`. Each event is counted as
+exactly one Meta action type (`Lead` as `lead`, which counts website and instant form leads alike;
+`Schedule` as `schedule_website`; the table is in [SETTINGS.md](SETTINGS.md#what-counts-as-a-result)).
+A custom event, a name of your own, is reported by Meta only through a custom conversion: create one
+for it in Events Manager (Custom conversions) and put its id in `RESULT_EVENT`, or set
+`RESULT_ACTION_TYPE=offsite_conversion.custom.<its id>`. The check reads the last 30 days and prints
+the action type it counts, how many it saw and every other type the account reported, so a wrong
+pick is easy to change.
 
 **3.7 The numbers** (from whoever owns the ad budget). `TARGET_COST_PER_RESULT` is what one result
 is worth paying for, and `MAX_DAILY_BUDGET` the most the account may spend per day in total, both in
 the ad account's currency. Until there is a target, the optimizer proposes nothing; until there is a
-ceiling, every budget change is refused, direct orders included.
+ceiling, every budget change is refused, orders included. The ceiling is a daily one, so the agent leaves
+campaigns and ad sets on a lifetime budget to Ads Manager: it reports on them, and refuses to change
+their budget or switch them on.
 
 ## 4. Slack: the app
 
@@ -246,7 +257,7 @@ ceiling, every budget change is refused, direct orders included.
 4. Pick the channel the agent works in (public or private). In it, type
    `/invite @Ads Command Center`. Click the channel name: the Channel ID (starts with `C`) is at the
    bottom of the About tab. Put it in `SLACK_CHANNEL` (the id, not `#name`).
-5. Operators (from whoever owns the ad budget) are the people who can approve cards and give orders.
+5. Operators (from whoever owns the ad budget) are the people who can approve cards and confirm orders.
    For each, open their profile, the three dots menu, Copy member ID (starts with `U`). Put the ids
    in `ADMIN_SLACK_USER_IDS`, separated by commas. Adding or removing one later is a change here and
    a restart.
@@ -275,8 +286,13 @@ agent also stops offering it on its own after the first refusal.
 npm run check
 ```
 
-With Docker Compose: `docker compose run --rm agent npm run check` (it starts the bundled database
-first).
+With Docker Compose, create the tables in the bundled database first, then run the check (each
+command starts the database if it is not running):
+
+```bash
+docker compose run --rm agent npm run db:setup
+docker compose run --rm agent npm run check
+```
 
 It prints one line per piece, never a value, and every problem once:
 
@@ -290,7 +306,8 @@ OK    scope: the whole ad account
 OK    the token has the permissions the agent needs
 OK    reads the Page and its Page token
 OK    reads the dataset (pixel); it last fired 2026-11-17
-OK    result "test rides" seen: 212 in the last 30 days (counted as schedule_website)
+OK    result "test rides" seen: 212 in the last 30 days, counted as schedule_website
+      the account also reported: lead, contact_website
 
 Slack
 OK    the bot token works (workspace Northfield Bikes)
@@ -300,7 +317,8 @@ OK    2 operators found
 OK    the app token can open a Socket Mode connection
 
 Database
-OK    connected (SSL: require); every table exists and this user can use them
+OK    connected (SSL: require)
+OK    tables: every table exists and this user can use them
 
 Claude
 OK    the key works and can use claude-opus-5-5
@@ -387,18 +405,21 @@ Or pm2: `npm install -g pm2`, then, in the repo folder,
 
 ```bash
 docker build -t meta-ads-command-center .
-docker run --env-file .env -p 3000:3000 meta-ads-command-center
+docker run --env-file .env -p 127.0.0.1:3000:3000 meta-ads-command-center
 ```
 
+The image has a health check of its own (`GET /health`), so `docker ps` shows it healthy or not.
 Two things to know about `docker run`:
 
 - `--env-file` passes each value exactly as written, quotes included, so write `.env` without quotes.
 - Inside a container, `localhost` is the container itself. A database on the host machine is
   `host.docker.internal` on Docker Desktop (on Linux, add `--add-host=host.docker.internal:host-gateway`).
 
-**With Docker Compose and a bundled Postgres:** leave `DATABASE_URL` empty in `.env`, then
-`docker compose up -d`. The agent creates its tables on the first start, and the data stays in a
-Docker volume. `docker compose logs -f agent` shows its log. The bundled database is reached from
+**With Docker Compose and a bundled Postgres:** leave `DATABASE_URL` empty in `.env`, run the two
+commands in step 6 once, then `docker compose up -d`. The data stays in a Docker volume. Compose reads
+a `$` in `.env` as the start of a variable, so a value with a `$` in it comes out changed: in a
+database password, write it URL-encoded as `%24`. The health check is published on `127.0.0.1`
+only. `docker compose logs -f agent` shows its log. The bundled database is reached from
 inside Compose: `docker compose exec db psql -U agent agent` opens it, and
 `docker compose exec db pg_dump -U agent agent > backup.sql` backs it up. To reach it from your own
 tools on this machine, uncomment the `ports` line under `db` in `docker-compose.yml`.
@@ -410,14 +431,18 @@ requests; it holds an outgoing connection to Slack and runs its own timers, so a
 pauses an idle instance, or gives it CPU only while a request is open, stops it from working. No
 public URL or open port is needed for Slack.
 
-On start it logs `[health] listening`, the tables it created (if any), `[slack] connected (Socket
-Mode)` and the next time of each scheduled job. It stops, with one line that says why, when a
-required setting is missing, the database cannot be reached or a Slack token is wrong: whatever
-keeps it running (a process manager, a container platform) starts it again, and the log says what to
-fix.
+On start it logs `[health] listening`, the tables it created or upgraded (if any), `[slack] connected
+(Socket Mode)` and the next time of each scheduled job. It stops, with one line that says why, when a
+required setting is missing, the database cannot be reached, Slack cannot be reached
+(`[slack] Slack could not be reached`, a network or DNS problem on this machine) or Slack refuses a
+token (`Slack refused the bot token`, with Slack's reason): whatever keeps it running (a process
+manager, a container platform) starts it again, and the log says what to fix. `DEBUG=1` adds the full
+error stack under that line.
 
-**Health:** `GET /health` on `PORT` (default 3000) answers `ok` and Slack's state; every other path
-answers 404. It is up from the first second, before Slack connects. The states:
+**Health:** `GET /health` on `PORT` (default 3000) answers three lines, `ok`, `slack: <state>` and
+`database: <state>`; every other path answers 404. It is up from the first second, before Slack
+connects. When the database stops answering, it answers 503 with `not ok` and
+`database: not answering`, so a platform's health check sees it. Slack's states:
 
 | State | What |
 |---|---|
@@ -428,9 +453,9 @@ answers 404. It is up from the first second, before Slack connects. The states:
 | `disconnected` | the connection is closed (the process is stopping) |
 
 With the header `x-health-secret` set to `HEALTH_SECRET`, it returns JSON instead: `ok`, `slack`
-(the state), `started_at`, `jobs` (each job's last run and failures) and `incidents` (the open
-issues). `jobs` and `incidents` are `null` only in the first seconds of a start, until the database is
-connected; when the database cannot be reached, the process stops instead of reporting unhealthy.
+(the state), `database`, `reason` (when not ok), `started_at`, `jobs` (each job's last run and
+failures) and `incidents` (the open issues). `jobs` and `incidents` are `null` in the first seconds of
+a start, until the database is connected, and while the database does not answer.
 
 **One copy, and rolling deploys.** Two copies running at once, for example while a rolling deploy
 swaps the old one for the new one, do not double anything: each scheduled job claims its slot in
@@ -446,11 +471,13 @@ By default the process runs its own timers, in `TIMEZONE` (or the ad account's t
 |---|---|---|
 | `optimizer` | daily at `OPTIMIZER_TIME` (08:45) | the full run: investigates, then proposes |
 | `report` | daily at `REPORT_TIME` (09:00) | the daily report |
-| `optimizer-check` | every `OPTIMIZER_EVERY_HOURS` (6) | a lighter run between mornings |
-| `moderation` | every `MODERATION_EVERY_MINUTES` (60) | the comment sweep |
-| `weekly` | on `WEEKLY_DAY` (monday) at `REPORT_TIME` | the weekly review and fresh lessons |
+| `optimizer-check` | every `OPTIMIZER_EVERY_HOURS` (6), on the UTC clock | a lighter run between mornings |
+| `moderation` | every `MODERATION_EVERY_MINUTES` (60), on the UTC clock; only with `META_PAGE_ID` | the comment sweep |
+| `weekly` | on `WEEKLY_DAY` (monday) at `REPORT_TIME` | the weekly review and fresh lessons; it runs even with `REPORT_ENABLED=false` |
 
-A process started after a daily job's time still runs that day's job.
+A process started after a daily job's time still runs that day's job. The two "every" jobs run on
+the UTC clock, not in `TIMEZONE`: every 6 hours means just after 00:00, 06:00, 12:00 and 18:00 UTC.
+Without `META_PAGE_ID` there is no comment sweep timer, and the start log says so.
 
 **Your own scheduler instead:** set `INTERNAL_SCHEDULER=false`. The process keeps serving Slack and
 your scheduler (cron, a cloud scheduler, a CI schedule) runs the jobs as commands:
@@ -490,12 +517,13 @@ PATH=/usr/local/bin:/usr/bin:/bin
   restart. Settings are read once, at start.
 - **A new Meta token:** put it in `META_ACCESS_TOKEN` and restart. When a token expires, the check
   and every job say Meta error 190.
-- **Upgrades:** pull the new code, `npm ci`, restart. Missing tables are created on start
-  (`npm run db:setup` does the same by hand). When a database admin owns the tables (step 2), the
-  agent's user cannot add tables or columns, so the owner runs the new
-  [`db/schema.sql`](../db/schema.sql) in the agent's database first (`psql -d <database> -f
-  db/schema.sql`, connected as the owner); with the default privileges from step 2 the agent can use
-  the new tables right away. If `slack-app-manifest.yaml` changed, paste it into the
+- **Upgrades:** pull the new code, `npm ci`, restart. Missing tables, and the columns and indexes a
+  new version adds, are added on start and named in the log (`npm run db:setup` does the same by
+  hand). When a database admin owns the tables (step 2), the agent's user cannot change them: the
+  check says `the tables need an upgrade (...), and only their owner, <owner>, can add it`, and the
+  owner runs the new [`db/schema.sql`](../db/schema.sql) in the agent's database (`psql -d <database>
+  -f db/schema.sql`, connected as the owner). It only adds what is missing and is safe to run again;
+  with the default privileges from step 2 the agent can use the new tables right away. If `slack-app-manifest.yaml` changed, paste it into the
   app's App Manifest page and reinstall the app. With Compose: `git pull && docker compose up -d --build`.
 - **Backups:** the database holds the brain, every decision and the write journal. Back it up like
   any Postgres database.

@@ -1,19 +1,19 @@
 # Using it
 
 This page is for everyone on the team. The agent lives in one Slack channel. You talk to it by
-mentioning it, **@Ads Command Center** (your developer may have given it another name), by replying
+mentioning it, **@Ads Command Center** (whoever set it up may have given it another name), by replying
 in a thread it started, or in a direct message. It also has a Home tab: click its name in Slack.
 
 ## The words it uses
 
 | Word | What it means |
 |---|---|
-| **Operator** | A person allowed to approve moves and give orders. Your developer sets who the operators are. Everyone else can ask anything and gets answers, but cannot change the account. |
+| **Operator** | A person allowed to approve cards and confirm orders. Whoever set up the agent decides who the operators are; `status` lists them. Everyone else can ask anything and gets answers, but cannot change the account. |
 | **Result** | The one thing your ads are for: a purchase, a lead, a booked test ride. The agent calls it by your team's word for it. |
 | **Target** | What one result is worth paying for. Every judgment is against it. |
 | **Ceiling** | The most the account may spend per day in total. Nothing the agent does can go above it. |
 | **Desk** | The one message it posts and pins in the channel each day. The report, the cards and the alerts go in its thread, so the channel stays readable. |
-| **Card** | One proposed move (pause an ad, raise a budget...) with the numbers behind it and Approve and Reject buttons. Each card has a number, like `#14`. |
+| **Card** | One proposed move (pause an ad, raise a budget...) with the numbers behind it and Approve and Reject buttons. Each card has a number, like `#14`. An order is a card too, with Confirm and Cancel. |
 | **Brain** | What the agent knows about your business: the company, the offer, the buyer, the words to use. Your team writes it. See [PLAYBOOK.md](PLAYBOOK.md). |
 | **Ladder** | Which kinds of moves wait for a person and which may happen on their own. Everything starts as waiting. |
 | **Threshold** | One of the numbers the agent judges ads by, like how much an ad may spend with no result before it is called a loser. Each is a multiple of the target. |
@@ -32,8 +32,9 @@ Claude from the numbers; the numbers themselves come straight from Meta:
 
 Yesterday can still go up: Meta keeps counting results for about two days.
 
-Right after it comes the scoreboard: every ad that spent in the last 7 days, each marked winning,
-on track, behind, losing or too early.
+Right after it comes the scoreboard: the 15 ads that spent most in the last 7 days, best first, each
+marked winning, on track, behind, losing or too early. Losing uses the same bar as a pause: no result
+after spending a few times the target.
 
 All amounts are in your ad account's currency.
 
@@ -50,6 +51,10 @@ Pause ad: Spring video v2
 
 (The example leaves out the currency symbol; your cards show your account's.)
 
+A card marked `#14 · needs a person` is a move the ladder would let happen on its own, held for a
+person this time: someone undid or reversed the same move before, or it would leave too few ads
+running in its ad set.
+
 Approve or Reject opens a small window with an optional "why". Write one when you can: once a week
 the agent turns the notes into lessons it follows from then on ("we never pause a new creative
 before day 5", "this campaign is a brand play, leave it").
@@ -60,12 +65,13 @@ What happens when an operator taps Approve:
 - for a budget card, it reads the budget from Meta again; if someone changed it in Ads Manager
   since the card was made, the card is refused as out of date and the next run proposes again
   with fresh numbers;
-- it checks the ceiling again;
+- it checks the ceiling again, and for a raise, the weekly growth cap with today's budgets;
 - it makes the change in Meta, and the card turns into a one line record of who approved it and
-  why.
+  why. If Meta gives no clear answer, the card says the outcome is unknown and `journal` lists it
+  (see "When Meta never answered a change").
 
-When two or more pause or turn-back-on cards arrive together, there is an Approve all button.
-Budget cards are always one tap each.
+When two or more pause or turn-back-on cards arrive together, the message just above them in the
+desk thread has an Approve all button. Budget cards are always one tap each.
 
 A card that stops making sense closes itself: the ad was paused by hand, the budget already changed,
 or a week went by.
@@ -92,7 +98,7 @@ mentioned or already answered, just reply: no mention needed. It reads the whole
 Under every answer there is a line written by the system, not by the model:
 
 ```
-Actions this turn: paused ad Spring video v2
+Actions this turn: posted a card to confirm: Pause ad Spring video v2 (nothing changes until an operator taps Confirm)
 ```
 
 or `No account changes this turn (read only).` If the answer ever claims a change that this line
@@ -100,17 +106,29 @@ does not show, the line is right.
 
 ## Orders (operators)
 
-Say it plainly and it is done right away:
+Say it plainly:
 
 - "pause the Retargeting campaign"
 - "set the Broad ad set to 150 a day"
 - "activate ad set Lookalike 2%"
 - "duplicate the Spring campaign and activate the copy"
 
-The ceiling applies: an order that would take a budget or the daily total above it is refused, and
-the line under the answer says so. After each order it reads the change back from Meta and keeps
-your words with the record. A copied campaign is built paused and switched on only at the end, and
-only if you asked.
+It answers with a card that names the exact change, with the numbers as they are now:
+
+```
+Set the daily budget of ad set Broad from 100 to 150
+[Confirm] [Cancel]
+```
+
+Nothing changes until an operator taps Confirm. Only an operator's own message files an order: a
+message from someone else, or words inside a comment the agent read, never do. A card nobody
+confirms expires after 24 hours. Cancel closes it with nothing changed.
+
+On Confirm, the ceiling is checked again with the live numbers: an order that would take a budget or
+the daily total above it is refused, and the card says so. After each order it reads the change
+back from Meta and keeps your words with the record. A copied campaign is built paused and switched
+on only at the end, and only if you asked. A campaign or ad set on a lifetime budget is left to Ads
+Manager, because the ceiling is a daily one.
 
 When the agent itself thinks something should change, it posts a card instead of acting. Ask it
 "what would you change?" and it posts its ideas as cards.
@@ -126,13 +144,12 @@ Each comment in that list ends with its id in code font, like `123_456`.
 
 1. Ask in the channel: "reply to comment 123_456 thanking them and pointing to the pricing page".
    The id comes from the sweep list, or ask "show me today's comments" and it lists them with ids.
-2. It answers in the thread with the exact text it would send, and sends nothing yet.
-3. An operator replies in that thread: "send it", or asks for changes ("shorter, and no
-   exclamation mark") and it shows the new text.
-4. Only after an operator approves the exact text does it send, and the line under its answer
-   says it was sent.
+2. It posts a card with the comment and the exact text it would send, and sends nothing yet. Ask
+   for changes in the thread ("shorter, and no exclamation mark") and it posts a new card.
+3. An operator taps Confirm on the card. Only then is it sent, and the card says so.
 
-Meta allows replies to a message only within 24 hours of the person's last message. To undo a hide:
+Hiding, unhiding or deleting a comment you ask for works the same way: a card, then Confirm. Meta
+allows replies to a message only within 24 hours of the person's last message. To undo a hide:
 "unhide comment 123_456".
 
 ## The brain
@@ -162,10 +179,10 @@ Mention the agent (or DM it) with one of these. They answer at once, without the
 |---|---|
 | `help` | this list |
 | `report` | yesterday's report now |
-| `scoreboard`, `scoreboard 14d` | every ad that spent, ranked against the target |
+| `scoreboard`, `scoreboard 14` | the 15 ads that spent most in the last 7 days (or 14), best first, ranked against the target |
 | `pending` | every card waiting, posted again |
-| `status` | what counts as a result, the target and where it comes from, the ceiling, the currency, changed thresholds, job health, open issues |
-| `optimize` | look for moves now: it posts cards, and pauses ads on its own only if the ladder allows it |
+| `status` | what counts as a result, the target and where it comes from, the ceiling, the currency, the operators, changed thresholds, job health, open issues |
+| `optimize` | look for moves now (the lighter run, not the full morning one): it posts cards in today's desk thread, and pauses ads on its own only if the ladder allows it |
 | `ladder` | which kinds of moves wait for a person and which happen on their own |
 | `ladder set pause auto` | let clear losing ads pause on their own |
 | `ladder set pause ask` | send pauses back to waiting for a person |
@@ -183,6 +200,7 @@ Mention the agent (or DM it) with one of these. They answer at once, without the
 one. Everything else needs an operator, because it can change the account or the agent:
 `optimize` can pause ads on its own when pauses are set to automatic, `scan comments` hides
 comments on your Page, and the rest change the brain, the ladder, the thresholds or the freeze.
+Anyone else who tries gets "That needs an operator", with how to become one.
 
 **Where the numbers come from:** a card's number is the `#14` at the bottom of the card; an
 automatic move's message ends with its undo command, number included; a journal number comes from
@@ -202,7 +220,10 @@ back on always wait for a person.
 The agent stops proposing moves, and says why in the channel, when:
 
 - the numbers look broken: far more results than clicks, impressions with no spend, or no results
-  at all on spend of several times the target (usually broken tracking; tell your developer);
+  at all on spend of several times the target (usually broken tracking; tell whoever set up the
+  agent);
+- it could not read fresh numbers from Meta, or has none for the days it judges (a gap in the
+  data), or one of these checks could not run;
 - something looks wrong: a day's spend far past the budget, cost per result jumping to over 3
   times its usual level, or a live campaign suddenly not delivering;
 - an operator sent `freeze`.
@@ -212,8 +233,9 @@ issue in the channel after a few failed tries.
 
 ## When Meta never answered a change
 
-If Meta does not answer a change (a timeout, a dropped connection), the agent cannot know whether
-it happened. It holds every later change until that one is settled. It tries to settle it on its
+If Meta does not answer a change clearly (a timeout, a dropped connection, a server error), the
+agent cannot know whether it happened, so it never sends it again on its own. It holds every later
+change until that one is settled, and the card or message behind it says the outcome is unknown. It tries to settle it on its
 own the next time it starts. Otherwise `journal` lists it, with what it changed. To settle one:
 
 1. Open the ad, ad set or campaign it names in Ads Manager.
@@ -234,13 +256,14 @@ result and spend a day, before against after), and the ad scoreboard.
 
 ## Who sets the numbers
 
-- **The target:** your developer sets it at install, and an operator can change it any time in
-  Slack: `brain set policy/target 45`. The one in the brain wins; `status` says which is in use.
-- **The ceiling:** only your developer, in the settings, followed by a restart. Nobody can raise it
-  from Slack, on purpose: it is the one number that caps every budget the agent touches.
-- **Who the operators are and what counts as a result:** your developer, in the settings.
+- **The target:** whoever set up the agent sets it at install, and an operator can change it any
+  time in Slack: `brain set policy/target 45`. The one in the brain wins; `status` says which is in
+  use.
+- **The ceiling:** only whoever set up the agent, in the settings, followed by a restart. Nobody can
+  raise it from Slack, on purpose: it is the one number that caps every budget the agent touches.
+- **Who the operators are and what counts as a result:** whoever set up the agent, in the settings.
 
-## For your developer
+## For whoever set it up
 
 Who the operators are, the target, the ceiling and what counts as a result are settings. See
 [SETTINGS.md](SETTINGS.md). Adding or removing an operator is a settings change and a restart.

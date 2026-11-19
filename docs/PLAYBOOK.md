@@ -8,8 +8,8 @@ someone who knows the company.
 ## Day one: the brain
 
 An operator writes these rows by mentioning the agent in the channel, for example
-`@Ads Command Center brain set business/company ...`. Before Slack is connected, your developer can
-write the same rows from the terminal (see [INSTALL.md](INSTALL.md), step 7).
+`@Ads Command Center brain set business/company ...`. Before Slack is connected, whoever sets up the
+agent can write the same rows from the terminal (see [INSTALL.md](INSTALL.md), step 7).
 
 Write each row in your own words. The examples below are for one made up business, Northfield
 Bikes, to show the kind of detail that helps.
@@ -78,12 +78,14 @@ wrong; it proposes the fix as a card.
 
 ## Days 1 to 3: watch
 
-- Every move waits for a person. Nothing changes without a tap.
+- Every move waits for a person. Nothing changes without a tap: a card's Approve, or Confirm on the
+  card an order posts.
 - Read the morning cards. Approve the ones you agree with. Reject the rest, and write why: that is how
   it learns your account.
 - Ask questions. Where an answer is generic, the brain is missing a row.
-- If the number of results looks wrong against Ads Manager, send `status` and tell your developer:
-  the result may be counted from the wrong event, which they can change.
+- If the number of results looks wrong against Ads Manager, send `status` and tell whoever set up
+  the agent: the result may be counted as the wrong action type, which they can change in the
+  settings (`npm run check` lists what the account reported).
 
 ## Days 4 to 7: tune
 
@@ -93,13 +95,15 @@ wrong; it proposes the fix as a card.
   plain words" below says what each one does.
 - If the target was a guess, set the real one: `brain set policy/target 45`.
 - Check the ceiling (the most the account may spend per day) is where you want it: `status` shows
-  it. It is the most important number you set; your developer changes it.
+  it. It is the most important number you set; whoever set up the agent changes it in the settings.
 
 ## Week two: decide on automatic pauses
 
 If its pause cards have been right for a week, `ladder set pause auto` lets clear losers stop on
 their own. Every automatic pause is posted with its undo command, and one undo sends pauses back to
-waiting for a person. Budget moves always stay with people.
+waiting for a person. A pause that would leave too few ads running in its ad set, or that repeats a
+move someone undid, still comes as a card marked `needs a person`. Budget moves and turning an ad
+back on always stay with people.
 
 ## Every week after
 

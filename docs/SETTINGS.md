@@ -10,7 +10,9 @@ needs URL-encoding, and a value in `.env` cut short by a `#` (an unquoted `#` st
 there).
 
 On and off settings take `true` or `false`, in any case. Anything else, `yes`, `off` or `1`
-included, is refused with the spelling to use, so a value is never guessed.
+included, is refused with the spelling to use, so a value is never guessed. Settings that take one
+of a few words (`MODERATION_ACTION`, `WEEKLY_DAY`, `MODEL_EFFORT`, `DATABASE_SSL`) take them in any
+case too. A number outside the range its row gives is refused, not clamped.
 
 A change to any setting takes effect when the process restarts.
 
@@ -20,7 +22,7 @@ A change to any setting takes effect when the process restarts.
 |---|---|
 | `META_ACCESS_TOKEN` | The system user token (see [INSTALL.md](INSTALL.md), step 3). |
 | `META_AD_ACCOUNT_ID` | The ad account, like `act_1234567890`. `act_` is added if you leave it out. |
-| `RESULT_EVENT` | The event that counts as a result, for example `Purchase`, `Lead`, `CompleteRegistration`, `Schedule`, a custom event name, or a custom conversion id. |
+| `RESULT_EVENT` | The event that counts as a result, as Events Manager names it: for example `Purchase`, `Lead`, `CompleteRegistration` or `Schedule`, or a custom conversion id (digits). A custom event (a name of your own) also needs `RESULT_ACTION_TYPE`; see [What counts as a result](#what-counts-as-a-result). |
 | `ANTHROPIC_API_KEY` | Your Anthropic API key. |
 | `SLACK_BOT_TOKEN` | The bot token, `xoxb-...`. |
 | `SLACK_APP_TOKEN` | The app level token with `connections:write`, `xapp-...`. |
@@ -32,7 +34,7 @@ A change to any setting takes effect when the process restarts.
 | Setting | Default | What |
 |---|---|---|
 | `TARGET_COST_PER_RESULT` | not set | What one result is worth paying for. Every guardrail is a multiple of it. The optimizer proposes nothing until there is one. An operator can also set it in Slack (`brain set policy/target 40`), and then the brain's value wins; `status` and the check say which one is in use. `1250` and `1,250` both work; a currency symbol is ignored. |
-| `MAX_DAILY_BUDGET` | not set | The ceiling on the total daily budget across everything in scope. Every budget write (approvals and direct orders) is refused if it would take one budget, or the total, above it. While it is not set, budget changes are turned off. Only this setting sets it, on purpose: nobody can raise it from Slack. |
+| `MAX_DAILY_BUDGET` | not set | The ceiling on the total daily budget across everything in scope. Every budget write (approvals and confirmed orders) is refused if it would take one budget, or the total, above it. While it is not set, budget changes are turned off. Only this setting sets it, on purpose: nobody can raise it from Slack. |
 
 Both are in the ad account's own currency. The agent reads the currency from the ad account and
 writes every amount in it, in Slack and in its prompts.
@@ -44,7 +46,7 @@ writes every amount in it, in Slack and in its prompts.
 | `META_PAGE_ID` | not set | The Facebook Page id (digits). Needed for comment moderation and message replies. |
 | `META_PIXEL_ID` | not set | The dataset (pixel) id. The check and the `pixel_health` tool use it. |
 | `META_IG_USER_ID` | found from the Page | The Instagram business account id. |
-| `META_API_VERSION` | `v25.0` | The Graph API version. `25`, `v25` and `v25.0` all mean `v25.0`. |
+| `META_API_VERSION` | `v27.0` | The Graph API version. `27`, `v27` and `v27.0` all mean `v27.0`. |
 | `CAMPAIGN_ALLOWLIST` | not set (whole account) | Comma separated campaign ids (digits, from the Campaign ID column in Ads Manager). When set, the agent reads and changes only these campaigns (plus copies it makes of them). |
 
 ## What counts as a result
@@ -52,13 +54,26 @@ writes every amount in it, in Slack and in its prompts.
 | Setting | Default | What |
 |---|---|---|
 | `RESULT_LABEL` | the event name | The word the agent uses for a result in Slack, for example `purchases`, `leads` or `test rides`. |
-| `RESULT_ACTION_TYPE` | mapped from `RESULT_EVENT` | The exact Insights action type to count, when the mapping picks the wrong one. Comma separated for a list; the first one reported wins. `npm run check` prints the candidates the account reported. |
+| `RESULT_ACTION_TYPE` | mapped from `RESULT_EVENT` | The one Insights action type to count, when the mapping is not the one you want, like `offsite_conversion.custom.1234567890`. One only: no commas or spaces. Required for a custom event. |
 | `SECONDARY_EVENT` | not set | A second event to watch and report (for example `Lead` next to `Schedule`). It is reported, never optimized. |
 | `SECONDARY_LABEL` | the event name | Its word in Slack. |
 | `SECONDARY_ACTION_TYPE` | mapped | Same as `RESULT_ACTION_TYPE`, for the secondary event. |
 
-Each row is counted once: of the candidate action types for an event, only the first one Meta reports
-is used, so an event that appears under two names is never counted twice.
+Each event is counted as exactly one action type, the same one for every day and every report, so
+an event that Meta reports under two names is never counted twice and a total never changes meaning
+from one day to the next. The mapping:
+
+| Event | Counted as |
+|---|---|
+| `Lead` | `lead` (every lead: website and instant forms) |
+| `Purchase`, `CompleteRegistration`, `InitiateCheckout`, `AddToCart`, `AddPaymentInfo`, `AddToWishlist`, `ViewContent`, `Search` | `offsite_conversion.fb_pixel_<event>`, like `offsite_conversion.fb_pixel_purchase` |
+| `Schedule`, `Contact`, `SubmitApplication`, `StartTrial`, `Subscribe`, `FindLocation`, `CustomizeProduct`, `Donate` | `<event>_website`, like `schedule_website` |
+| a custom conversion id (digits) | `offsite_conversion.custom.<id>` |
+| a name with a dot | taken as the action type itself |
+| a custom event | nothing on its own: Meta reports a custom event only through a custom conversion. Create one for the event in Events Manager (Custom conversions), then set `RESULT_ACTION_TYPE=offsite_conversion.custom.<its id>`, or put the id in `RESULT_EVENT`. Until then the check and `npm start` stop with that fix. |
+
+`npm run check` prints the action type in use and every other one the account reported in the last
+30 days, so a wrong pick is easy to see and change.
 
 ## Claude
 
@@ -72,7 +87,7 @@ is used, so an event that appears under two names is never counted twice.
 
 | Setting | Default | What |
 |---|---|---|
-| `ADMIN_SLACK_USER_IDS` | empty | Comma separated member ids (`U...`) of the operators. Only they can approve, reject, give orders, change the brain or the ladder. Empty means nobody can. Adding or removing an operator is a change here and a restart. |
+| `ADMIN_SLACK_USER_IDS` | empty | Comma separated member ids (`U...`) of the operators. Only they can approve, reject, confirm orders, change the brain or the ladder. Empty means nobody can. Adding or removing an operator is a change here and a restart. |
 
 ## Database
 
@@ -87,19 +102,19 @@ is used, so an event that appears under two names is never counted twice.
 |---|---|---|
 | `TIMEZONE` | the ad account's time zone | An IANA name like `America/New_York`. Days and schedule times use it. |
 | `INTERNAL_SCHEDULER` | `true` | `false` turns the timers off; run `npm run job -- <name>` from your own scheduler (see [INSTALL.md](INSTALL.md), step 9). |
-| `REPORT_ENABLED` | `true` | `false` stops the daily report's timer. `report` in Slack and `npm run job -- report` still post one on demand. |
+| `REPORT_ENABLED` | `true` | `false` stops the daily report's timer. `report` in Slack and `npm run job -- report` still post one on demand. The weekly review keeps its timer. |
 | `REPORT_TIME` | `09:00` | 24 hour time. The weekly review also runs at this time. |
-| `OPTIMIZER_ENABLED` | `true` | `false` turns the optimizer off everywhere: its timers stop, and `npm run job -- optimizer` (or `optimizer-check`) and `optimize` in Slack refuse with one line. Cards already posted still work, and direct orders still work. `status` and the Home tab say it is off. |
+| `OPTIMIZER_ENABLED` | `true` | `false` turns the optimizer off everywhere: its timers stop, and `npm run job -- optimizer` (or `optimizer-check`) and `optimize` in Slack refuse with one line. Cards already posted still work, and orders still work. `status` and the Home tab say it is off. |
 | `OPTIMIZER_TIME` | `08:45` | The full daily run. |
-| `OPTIMIZER_EVERY_HOURS` | `6` | The lighter check between mornings; `0` turns it off. 0 to 24. |
+| `OPTIMIZER_EVERY_HOURS` | `6` | The lighter check between mornings; `0` turns it off. 0 to 24. It runs on the UTC clock: with 6, just after 00:00, 06:00, 12:00 and 18:00 UTC, whatever `TIMEZONE` is. |
 | `WEEKLY_DAY` | `monday` | The day of the weekly review. |
 
 ## Comment moderation
 
 | Setting | Default | What |
 |---|---|---|
-| `MODERATION_ENABLED` | `true` | `false` stops the comment sweep's timer (the sweep needs `META_PAGE_ID`). `scan comments` in Slack and `npm run job -- moderation` still run it on demand. |
-| `MODERATION_EVERY_MINUTES` | `60` | 10 to 1440. |
+| `MODERATION_ENABLED` | `true` | `false` stops the comment sweep's timer. Without `META_PAGE_ID` there is no timer either, and the start log says so. `scan comments` in Slack and `npm run job -- moderation` still run it on demand. |
+| `MODERATION_EVERY_MINUTES` | `60` | 10 to 1440. On the UTC clock: with 60, just after each full hour UTC. |
 | `MODERATION_ACTION` | `hide` | `hide` hides clear spam, abuse and false claims (reversible). `delete` deletes them (falls back to hide when Meta refuses). `flag` acts on nothing and only reports. |
 | `MODERATION_MIN_CONFIDENCE` | `0.7` | Below this the comment is left up and flagged to the channel once. |
 
@@ -107,8 +122,9 @@ is used, so an event that appears under two names is never counted twice.
 
 | Setting | Default | What |
 |---|---|---|
-| `PORT` | `3000` | The health endpoint, `GET /health` (the only path served; others answer 404). |
+| `PORT` | `3000` | The health endpoint, `GET /health` (the only path served; others answer 404). It answers 503 while the database does not answer. |
 | `HEALTH_SECRET` | not set | When set, `GET /health` with the header `x-health-secret: <value>` returns job health and open issues as JSON ([INSTALL.md](INSTALL.md), step 8). |
+| `DEBUG` | not set | Any value prints the full error stack after the one line a failed start or command prints. For troubleshooting; leave it unset otherwise. |
 
 ## Thresholds you can tune from Slack
 
@@ -161,8 +177,9 @@ from there. Small numbers move it a little; large numbers decide it.
 
 ## Brain rows the code reads
 
-Most brain rows are free text the prompts read as written. Three are read as data and checked when
-they are written:
+Most brain rows are free text the prompts read as written. `answers/<key>` rows are written by the
+answer buttons on a question the agent asked the team, and read back the next time the same
+question comes up. Three rows are read as data and checked when they are written:
 
 | Row | What it must be |
 |---|---|

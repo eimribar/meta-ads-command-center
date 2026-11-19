@@ -129,3 +129,29 @@ test('a non-operator never sees the write tools, and a claimed change cannot app
   assert.equal(acct.writes().length, 0);
 });
 
+
+test('a message to a person is a card with the exact text, sent once on Confirm and never twice', async () => {
+  setup();
+  const sent = [];
+  fakeGraph(({ method, path, params }) => {
+    if (method === 'GET' && path === 'me/accounts') return { data: [{ id: '222', access_token: 'page-token' }] };
+    if (method === 'GET' && path === '222') return { access_token: 'page-token' };
+    if (method === 'POST' && path === '222/messages') { sent.push(params); return { recipient_id: '5150', message_id: 'm1' }; }
+    return { error: { code: 100, message: `no ${method} ${path}` } };
+  });
+  const slack = fakeSlack();
+  setRuntime({ slack });
+  fakeClaude([toolUse('d1', 'send_dm', { platform: 'facebook', recipient_id: '5150', text: 'Yes, Saturday at 10 works.' }), text('Card is up.')]);
+  await ask([{ role: 'user', content: 'tell them Saturday at 10 works' }], { actor: 'UOPERATOR', key: 'chat:test:7', thread: { channel: 'CTEST', thread_ts: '1' } });
+  assert.equal(sent.length, 0, 'nothing is sent before Confirm');
+  const card = slack.calls.find((c) => c.name === 'chat.postMessage' && c.args.blocks?.some((b) => b.type === 'actions'));
+  assert.match(JSON.stringify(card.args.blocks), /Send this message on Messenger to `5150`[\s\S]*Yes, Saturday at 10 works\./);
+  const app = fakeApp();
+  registerApprovals(app);
+  const confirm = card.args.blocks.find((b) => b.type === 'actions').elements.find((e) => e.action_id === 'order_confirm');
+  const tap = () => app.actions.order_confirm({ ack: async () => {}, body: { user: { id: 'UOPERATOR' }, channel: { id: 'CTEST' }, message: { ts: '1001' } }, action: confirm, client: slack });
+  await tap();
+  await tap();
+  assert.equal(sent.length, 1);
+  assert.match(JSON.stringify(sent[0]), /Saturday at 10/);
+});
