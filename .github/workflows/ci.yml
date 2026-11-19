@@ -1,0 +1,103 @@
+# Runs on every push and pull request. No keys are needed: Meta, Slack and Claude are faked in the
+# tests, and the database and Docker jobs use a throwaway Postgres.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  database:
+    name: install on a real Postgres
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: agent
+          POSTGRES_PASSWORD: agent
+          POSTGRES_DB: agent
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U agent -d agent"
+          --health-interval 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://agent:agent@localhost:5432/agent
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Create the tables, then run it again (the second run changes nothing)
+        run: npm run db:setup && npm run db:setup
+      - name: The check reaches the database (the other settings are missing on purpose)
+        run: |
+          npm run check > check.txt 2>&1 || true
+          cat check.txt
+          grep -E "^OK +connected" check.txt
+      - name: Terminal commands work with only the database
+        run: |
+          npm run cmd -- brain set business/company 'Northfield Bikes sells city e-bikes.'
+          npm run cmd -- brain | tee brain.txt
+          grep -q "Northfield Bikes" brain.txt
+          printf "brain set business/voice We're friendly and short.\nbrain\n" | npm run cmd | tee piped.txt
+          grep -q "We're friendly" piped.txt
+      - name: Without its settings the agent stops with a plain message
+        run: |
+          set +e; timeout 60 npm start > start.txt 2>&1; code=$?; set -e
+          cat start.txt
+          test "$code" -eq 1
+
+  docker:
+    name: Docker image and Compose
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the image
+        run: docker build -t meta-ads-command-center .
+      - name: The container runs as a non-root user
+        run: test "$(docker run --rm meta-ads-command-center id -u)" != "0"
+      - name: Compose brings its own database, creates the tables and runs the check
+        run: |
+          cp .env.example .env
+          docker compose up -d db
+          docker compose run --rm -T agent npm run db:setup
+          docker compose run --rm -T agent npm run check > check.txt 2>&1 || true
+          cat check.txt
+          grep -E "^OK +connected" check.txt
+      - name: Terminal commands work in the container
+        run: |
+          docker compose run --rm -T agent npm run cmd -- brain set business/company 'Northfield Bikes sells city e-bikes.'
+          docker compose run --rm -T agent npm run cmd -- brain | tee brain.txt
+          grep -q "Northfield Bikes" brain.txt
+      - name: Without its settings the agent stops with a plain message
+        run: |
+          set +e; timeout 60 docker compose run --rm -T agent node src/index.mjs > start.txt 2>&1; code=$?; set -e
+          cat start.txt
+          test "$code" -eq 1
+      - name: Clean up
+        if: always()
+        run: docker compose down -v

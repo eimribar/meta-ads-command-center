@@ -1,5 +1,7 @@
 # Meta Ads Command Center
 
+[![ci](https://github.com/eimribar/meta-ads-command-center/actions/workflows/ci.yml/badge.svg)](https://github.com/eimribar/meta-ads-command-center/actions/workflows/ci.yml)
+
 A Slack agent for a Meta (Facebook and Instagram) ads account. It works with your team from one
 Slack channel, where it shows up as **@Ads Command Center**.
 

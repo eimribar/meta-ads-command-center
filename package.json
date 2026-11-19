@@ -3,6 +3,14 @@
   "version": "1.0.0",
   "description": "A Slack agent that runs a Meta ads account with your team: reports, answers, proposals you approve, direct orders and comment moderation.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eimribar/meta-ads-command-center.git"
+  },
+  "homepage": "https://github.com/eimribar/meta-ads-command-center#readme",
+  "bugs": {
+    "url": "https://github.com/eimribar/meta-ads-command-center/issues"
+  },
   "type": "module",
   "private": true,
   "engines": {
