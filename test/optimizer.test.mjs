@@ -117,7 +117,7 @@ test('OPTIMIZER_ENABLED=false turns the optimizer off everywhere, and says so', 
   const reply = async (p) => { out.push(typeof p === 'string' ? p : p.text); };
   await handleCommand({ text: 'optimize', user: 'UOPERATOR', reply, jobs: { optimize: async () => { ran = true; } } });
   assert.equal(ran, false);
-  assert.match(out[0], /The optimizer is off: OPTIMIZER_ENABLED=false[\s\S]*Nothing was run/);
+  assert.match(out[0], /The optimizer is off in the settings[\s\S]*OPTIMIZER_ENABLED=true[\s\S]*Nothing was run/);
   await handleCommand({ text: 'status', user: 'USOMEONE', reply, jobs: {} });
   assert.match(out[1], /Optimizer: off \(OPTIMIZER_ENABLED=false/);
   assert.match(JSON.stringify(await buildHome('USOMEONE')), /Optimizer off/);

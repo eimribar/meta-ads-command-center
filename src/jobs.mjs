@@ -106,3 +106,39 @@ export async function setState(key, value) {
 export async function timeline(event, detail = {}) {
   await db().insert('timeline', [{ event, detail, at: nowIso() }]).catch(() => {});
 }
+
+// ── one at a time ─────────────────────────────────────────────────────────
+// A lease in `state`: only one holder at a time across every copy of the process. A lease older
+// than ttlMs is taken over (its holder stopped mid-run). Returns fn's result, or { busy: true }.
+export async function withLease(name, fn, { ttlMs = 30 * 60_000 } = {}) {
+  const d = db();
+  const key = `lease/${name}`;
+  const mine = { at: nowIso(), id: Math.random().toString(36).slice(2) };
+  let got = await d.insertIgnore('state', { key, value: mine, updated_at: nowIso() }, ['key']);
+  if (!got) {
+    const [row] = await d.select('state', { where: { key } });
+    const held = row?.value?.at && rt.now() - new Date(row.value.at) < ttlMs;
+    if (held) return { busy: true, since: row.value.at };
+    [got] = await d.update('state', { key, updated_at: row?.updated_at ?? null }, { value: mine, updated_at: nowIso() });
+    if (!got) return { busy: true };
+  }
+  try { return await fn(); }
+  finally { await d.remove('state', { key }).catch(() => {}); }
+}
+
+// True the first time `key` is seen (a Slack event delivered twice is answered once).
+export async function firstTime(key) {
+  return Boolean(await db().insertIgnore('state', { key: `seen/${key}`, value: { at: nowIso() }, updated_at: nowIso() }, ['key']));
+}
+export async function forgetSeen(olderThanDays = 7) {
+  const cutoff = new Date(rt.now().getTime() - olderThanDays * 864e5).toISOString();
+  const rows = await db().select('state', { where: { key: { prefix: 'seen/' }, updated_at: { lt: cutoff } } }).catch(() => []);
+  for (const r of rows) await db().remove('state', { key: r.key }).catch(() => {});
+  return rows.length;
+}
+
+// A read that fails loudly, for the health check.
+export async function dbAnswers() {
+  await db().select('state', { limit: 1 });
+  return true;
+}

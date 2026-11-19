@@ -2,7 +2,7 @@
 // command line (`npm run job -- <name>`), so a team can use its own scheduler instead.
 import { rt, db } from './runtime.mjs';
 import { getConfig } from './config.mjs';
-import { runJob, getState, setState, postOnce } from './jobs.mjs';
+import { runJob, getState, setState, postOnce, forgetSeen } from './jobs.mjs';
 import { today, daysAgo, dayOf } from './clock.mjs';
 import { buildDailyReport } from './report.mjs';
 import { runOptimizer } from './optimizer/optimizer.mjs';
@@ -89,6 +89,8 @@ async function optimizerJob({ dryRun, investigate, cadence }) {
     return { summary: `dry run: ${run.actions.length} would be filed` };
   }
   for (const a of auto) await post(`:robot_face: Applied on its own (ladder is on auto): ${a.action_type.replace(/_/g, ' ')} *${a.target_name || a.target_id}*. ${a.explain}\n_Send \`undo ${a.id}\` to reverse it._`);
+  const unknown = run.actions.filter((a) => a.disposition === 'unknown');
+  for (const a of unknown) await post(`:question: Outcome unknown: ${a.action_type.replace(/_/g, ' ')} *${a.target_name || a.target_id}* was sent on its own, and Meta gave no clear answer. Check it in Ads Manager, then send \`journal clear ${a.journal_id}\`. Further changes wait until then.`);
   if (pending.length) {
     const header = `:bulb: *${pending.length} decision${pending.length === 1 ? '' : 's'} for you* (target ${money(run.target)} per ${label})\n${run.summary || ''}`;
     await postCards(pending, null, { header });
@@ -96,7 +98,7 @@ async function optimizerJob({ dryRun, investigate, cadence }) {
     await post(`:white_check_mark: Optimizer: nothing needs approval today. ${run.summary || ''}`);
   }
   await updateDesk().catch(() => {});
-  return { summary: `${plural(pending.length, 'card')}, ${auto.length} automatic, ${run.blocked.length} blocked` };
+  return { summary: `${plural(pending.length, 'card')}, ${auto.length} automatic, ${run.blocked.length} blocked${unknown.length ? `, ${unknown.length} with an unknown outcome` : ''}`, auto: auto.length };
 }
 
 async function moderationJob({ dryRun }) {
@@ -108,6 +110,8 @@ async function moderationJob({ dryRun }) {
 
 async function weeklyJob({ dryRun }) {
   const post = poster({ dryRun });
+  // Slack event ids older than a week are no longer needed to answer each message once.
+  if (!dryRun) await forgetSeen(7).catch(() => {});
   const lessons = dryRun ? { held: true, summary: 'dry run: lessons not changed' } : await distillLearnings().catch((e) => ({ held: true, summary: `lessons failed: ${String(e.message).slice(0, 100)}` }));
   const since = daysAgo(7);
   const decided = await db().select('actions_log', { where: { run_date: { gte: since } } }).catch(() => []);
@@ -137,7 +141,7 @@ export const JOBS = {
 // OPTIMIZER_ENABLED=false turns the optimizer off everywhere: the timers, npm run job and
 // `optimize` in Slack. The report and the comment sweep keep their on demand runs when their
 // own setting is false; only their timers stop.
-export const OPTIMIZER_OFF = 'The optimizer is off: OPTIMIZER_ENABLED=false in the settings. Your developer sets it to true and restarts to turn it on.';
+export const OPTIMIZER_OFF = 'The optimizer is off in the settings. Whoever set up the agent can turn it on (OPTIMIZER_ENABLED=true) and restart it.';
 export function jobOff(name) {
   return ['optimizer', 'optimizer-check'].includes(name) && getConfig().OPTIMIZER_ENABLED === false ? OPTIMIZER_OFF : null;
 }

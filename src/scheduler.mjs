@@ -28,12 +28,14 @@ function daily(name, time) {
   console.log(`[scheduler] ${name} daily at ${time.text} ${timezone()}, next ${nextDaily(time).toISOString()}`);
 }
 
+// Every N minutes on the clock in UTC (an hourly job runs just after each full UTC hour), so
+// every copy of the process lands on the same slot and the claim runs it once.
 function every(name, minutes) {
   const ms = minutes * 60_000;
   const first = ms - (rt.now().getTime() % ms) + 5_000;
   const t = setTimeout(() => { run(name); const i = setInterval(() => run(name), ms); timers.push(i); }, first);
   timers.push(t);
-  console.log(`[scheduler] ${name} every ${minutes} minutes`);
+  console.log(`[scheduler] ${name} every ${minutes} minutes (on the UTC clock)`);
 }
 
 function weekly(name, day, time) {
@@ -42,16 +44,32 @@ function weekly(name, day, time) {
   console.log(`[scheduler] ${name} on ${day} at ${time.text} ${timezone()}`);
 }
 
-export function startScheduler() {
-  const cfg = getConfig();
-  if (!cfg.INTERNAL_SCHEDULER) { console.log('[scheduler] internal timers are off (INTERNAL_SCHEDULER=false); run jobs from your own scheduler'); return; }
-  if (cfg.REPORT_ENABLED) daily('report', cfg.REPORT_TIME);
+// Which timers a set of settings starts: [{ name, kind: daily | every | weekly, ... }], plus the
+// notes printed for what is off.
+export function timerPlan(cfg) {
+  const plan = [], notes = [];
+  if (!cfg.INTERNAL_SCHEDULER) return { plan, notes: ['internal timers are off (INTERNAL_SCHEDULER=false); run jobs from your own scheduler'] };
+  if (cfg.REPORT_ENABLED) plan.push({ name: 'report', kind: 'daily', time: cfg.REPORT_TIME });
   if (cfg.OPTIMIZER_ENABLED) {
-    daily('optimizer', cfg.OPTIMIZER_TIME);
-    if (cfg.OPTIMIZER_EVERY_HOURS > 0) every('optimizer-check', cfg.OPTIMIZER_EVERY_HOURS * 60);
+    plan.push({ name: 'optimizer', kind: 'daily', time: cfg.OPTIMIZER_TIME });
+    if (cfg.OPTIMIZER_EVERY_HOURS > 0) plan.push({ name: 'optimizer-check', kind: 'every', minutes: cfg.OPTIMIZER_EVERY_HOURS * 60 });
   }
-  if (cfg.MODERATION_ENABLED) every('moderation', cfg.MODERATION_EVERY_MINUTES);
-  weekly('weekly', cfg.WEEKLY_DAY, cfg.REPORT_TIME);
+  // The comment sweep needs a Page to read; without META_PAGE_ID there is no timer for it.
+  if (cfg.MODERATION_ENABLED && cfg.META_PAGE_ID) plan.push({ name: 'moderation', kind: 'every', minutes: cfg.MODERATION_EVERY_MINUTES });
+  else if (cfg.MODERATION_ENABLED) notes.push('moderation: no timer (META_PAGE_ID is not set)');
+  // The weekly review runs even when REPORT_ENABLED=false; it shares REPORT_TIME.
+  plan.push({ name: 'weekly', kind: 'weekly', day: cfg.WEEKLY_DAY, time: cfg.REPORT_TIME });
+  return { plan, notes };
+}
+
+export function startScheduler() {
+  const { plan, notes } = timerPlan(getConfig());
+  for (const n of notes) console.log(`[scheduler] ${n}`);
+  for (const t of plan) {
+    if (t.kind === 'daily') daily(t.name, t.time);
+    else if (t.kind === 'every') every(t.name, t.minutes);
+    else weekly(t.name, t.day, t.time);
+  }
 }
 
 export function stopScheduler() { for (const t of timers.splice(0)) { clearTimeout(t); clearInterval(t); } }

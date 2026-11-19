@@ -91,7 +91,9 @@ const clean = (v) => Math.max(0, Number(v) || 0);
 
 function prior({ priorCost, priorResults }, fallbackCost) {
   const cost = Number(priorCost) > 0 ? Number(priorCost) : fallbackCost;
-  const pr = Number(priorResults) > 0 ? Number(priorResults) : 3;
+  // 0 is a valid setting (no prior weight); a Gamma needs a positive shape, so it becomes tiny.
+  const n = priorResults == null || priorResults === '' ? NaN : Number(priorResults);
+  const pr = Number.isFinite(n) && n >= 0 ? Math.max(n, 0.01) : 3;
   return { alpha0: pr, beta0: pr * cost };
 }
 

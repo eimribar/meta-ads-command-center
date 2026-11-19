@@ -10,16 +10,19 @@ import { policy } from './policy.mjs';
 import { totalDailyBudget } from '../account.mjs';
 import { storedBudgetOn } from '../insights.mjs';
 import { money } from '../money.mjs';
+import { rowsWith } from './rows.mjs';
 
 const round = (v) => (v == null ? null : Math.round(v * 100) / 100);
 const median = (xs) => { const s = xs.filter(Number.isFinite).sort((a, b) => a - b); if (!s.length) return null; const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 
-export async function dataTrustGate({ days = 3 } = {}) {
+// fresh: rows pulled this run and not stored (a dry run), laid over the stored ones.
+export async function dataTrustGate({ days = 3, fresh = null } = {}) {
   const lag = policy().t.data.lagDays;
   const until = daysAgo(lag), since = daysAgo(days + lag - 1);
   let rows;
   try {
-    rows = (await db().select('performance_daily', { where: { level: 'ad', date: { gte: since } } })).filter((r) => r.date <= until);
+    rows = rowsWith(await db().select('performance_daily', { where: { level: 'ad', date: { gte: since } } }), fresh?.filter((r) => r.level === 'ad'))
+      .filter((r) => r.date >= since && r.date <= until);
   } catch (e) {
     return { trusted: false, failures: [{ check: 'read', detail: `could not read stored numbers: ${String(e.message).slice(0, 120)}` }], window: { since, until } };
   }
@@ -45,10 +48,11 @@ export async function dataTrustGate({ days = 3 } = {}) {
 }
 
 // Uses the stored campaign rows and the live structure (with its budgets).
-export async function circuitBreaker({ live }) {
+export async function circuitBreaker({ live, fresh = null }) {
   const lag = policy().t.data.lagDays;
-  const cutoff = daysAgo(lag);
-  const rows = (await db().select('performance_daily', { where: { level: 'campaign', date: { gte: daysAgo(12) } } })).filter((r) => r.date <= cutoff);
+  const cutoff = daysAgo(lag), since = daysAgo(12);
+  const rows = rowsWith(await db().select('performance_daily', { where: { level: 'campaign', date: { gte: since } } }), fresh?.filter((r) => r.level === 'campaign'))
+    .filter((r) => r.date >= since && r.date <= cutoff);
   const active = new Set(Object.entries(live.campaigns).filter(([, c]) => c.effective === 'ACTIVE').map(([id]) => id));
   const byDay = {};
   for (const r of rows) {

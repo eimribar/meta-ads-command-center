@@ -56,17 +56,24 @@ export function gateProposal(p, live) {
 }
 
 // The standing of each decision key, from the last row filed for it.
-//   open (a card is waiting) | committed (applied) | rejected | apply_failed | closed
+//   open (a card is waiting) | committed (applied) | undone | unknown (no clear answer from
+//   Meta) | rejected | apply_failed | closed
+export function standingOf(r) {
+  if (['proposed', 'escalated'].includes(r.disposition)) return 'open';
+  if (r.disposition === 'unknown') return 'unknown';
+  if (r.undone_at) return 'undone';
+  if (['auto_applied', 'applied_by_human'].includes(r.disposition)) return 'committed';
+  if (r.close_reason === 'human_reject') return 'rejected';
+  if (r.close_reason === 'execution_needs_review') return 'apply_failed';
+  return 'closed';
+}
 export async function loadLedger({ days = 60 } = {}) {
   const since = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
   const rows = await db().select('actions_log', { where: { run_date: { gte: since } }, order: 'id' });
   const ledger = new Map();
   for (const r of rows) {
     if (!r.decision_key) continue;
-    const standing = ['proposed', 'escalated'].includes(r.disposition) ? 'open'
-      : ['auto_applied', 'applied_by_human'].includes(r.disposition) && !r.undone_at ? 'committed'
-        : r.close_reason === 'human_reject' ? 'rejected'
-          : r.close_reason === 'execution_needs_review' ? 'apply_failed' : 'closed';
+    const standing = standingOf(r);
     ledger.set(r.decision_key, { ...r, standing });
   }
   return ledger;
@@ -101,8 +108,13 @@ export function checkSuppression(key, ledger, live, evidence = null, now = Date.
   const day = String(row.applied_at || row.created_at || '').slice(0, 10);
   switch (row.standing) {
     case 'open': return { suppressed: true, standing: 'open', why: `card #${row.id} is already waiting` };
+    case 'unknown': return { suppressed: true, standing: 'unknown', why: `move #${row.id} has an unknown outcome; check it in Ads Manager, then send journal clear ${row.journal_id ?? '<number>'}` };
+    // A person reversed this move: asking again is for a person to decide, never automatic.
+    case 'undone': return { suppressed: false, escalate: true, reopened: `#${row.id} was undone${row.undone_by ? ` by ${row.undone_by}` : ''} ${String(row.undone_at || '').slice(0, 10)}, so this waits for a person` };
     case 'committed':
       if (!regressed(key, row, live, now)) return { suppressed: true, standing: 'committed', why: `applied ${day} and still holds` };
+      // Someone turned a paused ad back on (or the other way round) since: a person decides.
+      if (!key.startsWith('budget:')) return { suppressed: false, escalate: true, reopened: `it was applied ${day}, and someone changed it back since, so this waits for a person` };
       return { suppressed: false, reopened: `the account moved since it was applied ${day}` };
     case 'rejected': {
       const hold = policy().t.suppression.rejectCooldownDays;
