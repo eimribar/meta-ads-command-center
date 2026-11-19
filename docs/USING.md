@@ -13,11 +13,25 @@ in a thread it started, or in a direct message. It also has a Home tab: click it
 | **Target** | What one result is worth paying for. Every judgment is against it. |
 | **Ceiling** | The most the account may spend per day in total. Nothing the agent does can go above it. |
 | **Desk** | The one message it posts and pins in the channel each day. The report, the cards and the alerts go in its thread, so the channel stays readable. |
-| **Card** | One proposed move (pause an ad, raise a budget...) with the numbers behind it and Approve and Reject buttons. Each card has a number, like `#14`. An order is a card too, with Confirm and Cancel. |
+| **Card** | One proposed move (pause an ad, raise a budget...) with the numbers behind it and Approve and Reject buttons. Cards the agent files have a number, like `#14`. An order is a card too, with Confirm and Cancel, but it has no number. |
 | **Brain** | What the agent knows about your business: the company, the offer, the buyer, the words to use. Your team writes it. See [PLAYBOOK.md](PLAYBOOK.md). |
 | **Ladder** | Which kinds of moves wait for a person and which may happen on their own. Everything starts as waiting. |
 | **Threshold** | One of the numbers the agent judges ads by, like how much an ad may spend with no result before it is called a loser. Each is a multiple of the target. |
 | **Journal** | The agent's record of every change it sent to Meta. When Meta never answered one, the journal holds every later change until a person checks it. |
+
+## What it never does on its own
+
+- It never turns an ad back on, raises a budget or trims one without an operator's tap.
+- It never pauses an ad on its own unless an operator set `ladder set pause auto`, and even then it
+  never pauses the last running ads of an ad set.
+- It never changes anything because of a message alone, someone else's words, or words inside a
+  comment it read. A change needs an operator's tap on a card.
+- It never goes over the daily budget ceiling.
+- It never creates ads from scratch, never edits targeting, creative or bids, and never deletes a
+  campaign, ad set or ad.
+- It never sends a reply or a message without an operator's tap on the exact text.
+- The one thing it does by itself every hour is the comment sweep: it hides clear spam, abuse and
+  false claims (or deletes them, if whoever set it up chose that).
 
 ## The daily report
 
@@ -122,13 +136,19 @@ Set the daily budget of ad set Broad from 100 to 150
 
 Nothing changes until an operator taps Confirm. Only an operator's own message files an order: a
 message from someone else, or words inside a comment the agent read, never do. A card nobody
-confirms expires after 24 hours. Cancel closes it with nothing changed.
+confirms expires after 24 hours. Cancel closes it with nothing changed. The operator who gave the
+order can confirm it, and so can any other operator.
 
 On Confirm, the ceiling is checked again with the live numbers: an order that would take a budget or
 the daily total above it is refused, and the card says so. After each order it reads the change
 back from Meta and keeps your words with the record. A copied campaign is built paused and switched
 on only at the end, and only if you asked. A campaign or ad set on a lifetime budget is left to Ads
 Manager, because the ceiling is a daily one.
+
+**Taking an order back.** `undo 14` is for the agent's own moves, the cards with a number. To
+reverse a confirmed order, give the opposite order: "turn the Retargeting campaign back on", "set the
+Broad ad set back to 100 a day". The agent never deletes anything, so a copied campaign stays in the
+account: pause it, or delete it in Ads Manager.
 
 When the agent itself thinks something should change, it posts a card instead of acting. Ask it
 "what would you change?" and it posts its ideas as cards.
@@ -137,7 +157,9 @@ When the agent itself thinks something should change, it posts a card instead of
 
 Every hour the agent reads the comments on your live ads and recent posts. It hides clear spam,
 harassment and flat false claims ("this is a scam"). Honest criticism, questions (even skeptical
-ones) and jokes stay up. Anything it is unsure about stays up and is listed once in the desk thread.
+ones) and jokes stay up. Anything it is unsure about stays up and is listed once in the desk thread. If whoever set it up
+chose delete instead of hide, the sweep deletes those comments, and a deleted comment cannot be
+brought back.
 Each comment in that list ends with its id in code font, like `123_456`.
 
 **Replying to a comment or a message:**
@@ -146,7 +168,8 @@ Each comment in that list ends with its id in code font, like `123_456`.
    The id comes from the sweep list, or ask "show me today's comments" and it lists them with ids.
 2. It posts a card with the comment and the exact text it would send, and sends nothing yet. Ask
    for changes in the thread ("shorter, and no exclamation mark") and it posts a new card.
-3. An operator taps Confirm on the card. Only then is it sent, and the card says so.
+3. An operator taps Confirm on the card. Only then is it sent, and the card says so. Once sent, a
+   reply or a message cannot be taken back by the agent.
 
 Hiding, unhiding or deleting a comment you ask for works the same way: a card, then Confirm. Meta
 allows replies to a message only within 24 hours of the person's last message. To undo a hide:
@@ -165,7 +188,8 @@ brain rm business/old_offer             remove a row
 ```
 
 A `brain set` without the slash, or without text after the name, saves nothing and says how to write
-it.
+it. A row you replace is not kept anywhere, so send `brain` to see the current text before you
+change it.
 
 When the agent learns a lasting fact in conversation, it proposes a brain change as a card with
 Apply and Dismiss. When only the team can answer something, it asks with answer buttons.
@@ -186,7 +210,7 @@ Mention the agent (or DM it) with one of these. They answer at once, without the
 | `ladder` | which kinds of moves wait for a person and which happen on their own |
 | `ladder set pause auto` | let clear losing ads pause on their own |
 | `ladder set pause ask` | send pauses back to waiting for a person |
-| `undo 14` | reverse the move with card number 14 |
+| `undo 14` | reverse the move with card number 14 (orders have no number: give the opposite order). An undo of a budget move is refused if the budget changed since that move. |
 | `freeze <why>`, `unfreeze` | stop the agent proposing moves (cards already posted still work), or let it start again |
 | `brain`, `brain set ...`, `brain rm ...` | see "The brain" above |
 | `thresholds` | every threshold and its value now |
@@ -258,7 +282,7 @@ result and spend a day, before against after), and the ad scoreboard.
 
 - **The target:** whoever set up the agent sets it at install, and an operator can change it any
   time in Slack: `brain set policy/target 45`. The one in the brain wins; `status` says which is in
-  use.
+  use. `brain rm policy/target` goes back to the target in the settings.
 - **The ceiling:** only whoever set up the agent, in the settings, followed by a restart. Nobody can
   raise it from Slack, on purpose: it is the one number that caps every budget the agent touches.
 - **Who the operators are and what counts as a result:** whoever set up the agent, in the settings.

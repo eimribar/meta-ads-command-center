@@ -49,14 +49,22 @@ export function toTerminal(payload) {
   return parts.join('\n').replace(/:[a-z0-9_+-]+:\s?/g, '').replace(/<@([A-Z0-9]+)>/g, '@$1');
 }
 
+// What to print for a failure: a known cause gets only its plain line (no raw API text);
+// anything else gets the message and the general next step. DEBUG=1 adds the full error.
+export function errorLines(msg) {
+  const hint = hintFor(msg);
+  return hint === GENERIC_HINT ? [msg, hint] : [hint];
+}
+
 // A Meta or database failure, with the next step.
 function hintFor(msg) {
   if (/\b190\b/.test(msg) && /token/i.test(msg)) return 'The Meta token is invalid or has expired: generate a new system user token and put it in META_ACCESS_TOKEN (docs/INSTALL.md, step 3).';
   if (/invalid x-api-key|authentication_error/i.test(msg)) return 'Anthropic refused the key: check ANTHROPIC_API_KEY (npm run check).';
   if (/credit balance|billing/i.test(msg)) return 'The Anthropic organization has no credit: buy credits in the Claude Console, Settings > Billing (docs/INSTALL.md, step 5).';
   if (/invalid_auth|not_authed|token_revoked/i.test(msg)) return 'Slack refused a token: check SLACK_BOT_TOKEN and SLACK_APP_TOKEN (npm run check).';
-  return 'Run `npm run check` to see what needs attention.';
+  return GENERIC_HINT;
 }
+const GENERIC_HINT = 'Run `npm run check` to see what needs attention.';
 
 async function main() {
   if (cmd === 'check') {
@@ -204,9 +212,7 @@ async function shutdown() {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().then(async (code) => { await shutdown(); process.exit(code); })
     .catch(async (e) => {
-      const msg = String(e?.message || e);
-      console.error(msg);
-      console.error(hintFor(msg));
+      for (const l of errorLines(String(e?.message || e))) console.error(l);
       if (process.env.DEBUG) console.error(e);
       await shutdown().catch(() => {});
       process.exit(1);

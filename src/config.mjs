@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
-import { parseAmountText } from './money.mjs';
-import { eventProblem, ACTION_TYPE_SHAPE } from './events.mjs';
+import { parseAmountText, ambiguousAmount } from './money.mjs';
+import { eventProblem, severalEventsProblem, ACTION_TYPE_SHAPE } from './events.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 // The raw .env text, kept so a value cut short by a # can be named (see dotenvProblems).
@@ -58,6 +58,15 @@ export function channelProblem(v) {
   if (inLink) return `is a channel link; the channel id in it is ${inLink}, so write SLACK_CHANNEL=${inLink}`;
   if (/^#|[a-z]/.test(s)) return 'looks like a channel name; use the channel id, which starts with C (channel details, at the bottom)';
   return 'must be a channel id, which starts with C (channel details, at the bottom)';
+}
+// An Ads Manager link has the account number in it (act=1234567890): name it in the fix.
+export function accountProblem(v) {
+  const s = String(v).trim();
+  const isLink = /^https?:\/\/|facebook\.com/i.test(s);
+  const inLink = isLink ? (s.match(/[?&#](?:act|ad_account_id)=(?:act_)?(\d+)/) || [])[1] : null;
+  if (inLink) return `is an Ads Manager link; the account number in it is ${inLink}, so write META_AD_ACCOUNT_ID=act_${inLink}`;
+  if (isLink) return 'is a link with no account number in it; copy the number after act= in the Ads Manager address bar, like act_1234567890';
+  return 'must be act_ followed by the account number, like act_1234567890';
 }
 const channelId = shaped((v) => /^[CG][A-Z0-9]+$/.test(v), channelProblem);
 const memberIds = () => z.string().optional().transform((v, ctx) => {
@@ -121,6 +130,8 @@ const actionType = () => z.string().trim().optional().transform((v, ctx) => {
 });
 const money = () => z.string().optional().transform((v, ctx) => {
   if (v == null || v.trim() === '') return undefined;
+  const twoWays = ambiguousAmount(v);
+  if (twoWays) { ctx.addIssue({ code: 'custom', message: `is ambiguous: ${twoWays}` }); return z.NEVER; }
   const n = parseAmountText(v);
   if (n == null) { ctx.addIssue({ code: 'custom', message: /\d,\d{1,2}$|\d,\d{4,}/.test(v.trim()) ? 'must be a positive number with a decimal point (12.50, not 12,50); a comma only separates thousands' : 'must be a positive number' }); return z.NEVER; }
   return n;
@@ -153,8 +164,12 @@ export const REQUIRED = [
 const schema = z.object({
   // Meta
   META_ACCESS_TOKEN: text(),
-  META_AD_ACCOUNT_ID: text().transform((v) => (v.startsWith('act_') ? v : `act_${v}`))
-    .refine((v) => /^act_\d+$/.test(v), 'must be act_ followed by the account number, like act_1234567890'),
+  META_AD_ACCOUNT_ID: text().transform((v, ctx) => {
+    const id = v.startsWith('act_') ? v : `act_${v}`;
+    if (/^act_\d+$/.test(id)) return id;
+    ctx.addIssue({ code: 'custom', message: accountProblem(v) });
+    return z.NEVER;
+  }),
   META_PAGE_ID: optionalDigits('Page'),
   META_PIXEL_ID: optionalDigits('dataset'),
   META_IG_USER_ID: optionalDigits('Instagram account'),
@@ -260,6 +275,8 @@ export function parseConfig(env = process.env, { require = REQUIRED, dotenv = do
   const named = new Set(problems.map((p) => p.key));
   for (const which of ['RESULT', 'SECONDARY']) {
     if (named.has(`${which}_EVENT`) || named.has(`${which}_ACTION_TYPE`)) continue;
+    const several = severalEventsProblem(config[`${which}_EVENT`], which);
+    if (several) { problems.push({ key: `${which}_EVENT`, message: several }); continue; }
     const why = eventProblem(config[`${which}_EVENT`], config[`${which}_ACTION_TYPE`], which);
     if (why) problems.push({ key: `${which}_ACTION_TYPE`, message: why });
   }

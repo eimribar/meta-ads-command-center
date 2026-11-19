@@ -3,7 +3,7 @@
 // terminal, a brain card or an answer button), so a row that would be ignored is refused with
 // what was wrong, never saved. Every other row is free text the prompts read as it is.
 import { DEFAULTS, RANGES } from './optimizer/defaults.mjs';
-import { parseAmountText } from './money.mjs';
+import { parseAmountText, ambiguousAmount } from './money.mjs';
 
 export class BrainRowError extends Error {}
 
@@ -60,6 +60,8 @@ export function parsePostIds(raw) {
 export function checkBrainRow(scope, key, content) {
   if (scope === 'policy') {
     if (key === 'target') {
+      const twoWays = ambiguousAmount(typeof content === 'object' && content ? (content.value ?? content.target ?? content.amount) : content);
+      if (twoWays) throw new BrainRowError(`policy/target was not saved: ${twoWays}. Nothing was saved.`);
       const n = parseTarget(content);
       if (!n) throw new BrainRowError('policy/target must be a plain number in the ad account\'s currency, for example `brain set policy/target 150` (a decimal point, not a comma: 12.50). Nothing was saved.');
       return n;

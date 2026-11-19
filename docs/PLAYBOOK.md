@@ -63,6 +63,10 @@ as a plain number in the ad account's currency:
 brain set policy/target 40
 ```
 
+Write it without a thousands dot: `1250` or `1,250`, not `1.250` (that one could mean 1.25, so
+it is refused). `brain rm policy/target` goes back to the target in the settings. A row you replace
+is not kept, so send `brain` to see the current text before you change it.
+
 Rows to add as you go:
 
 | Row | What |

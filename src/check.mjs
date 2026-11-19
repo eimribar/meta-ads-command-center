@@ -82,6 +82,7 @@ export async function runCheck(env, deps) {
       const a = await g(c.META_AD_ACCOUNT_ID, { fields: 'name,account_status,currency,timezone_name' });
       if (a.account_status !== 1) L.bad(`the ad account is readable but not active (status ${a.account_status})`, 'check the account in Ads Manager (billing, restrictions)');
       else L.ok(`reads the ad account (currency ${a.currency}, time zone ${a.timezone_name})`);
+      flags.currency = a.currency;
       accountOk = true;
     } catch (e) {
       const p = metaProblem(e, { what: 'cannot read the ad account', assign: assignAccount });
@@ -205,7 +206,8 @@ async function rest(L, c, has, deps) {
       else L.bad(`tables: ${t.what}`, t.fix);
       if (t.level !== 'bad') {
         const [row] = await pg.query("select content from brain where lower(scope) = 'policy' and lower(key) = 'target'").catch(() => []);
-        out.brainTarget = Boolean(parseTarget(row?.content));
+        out.brainTargetValue = parseTarget(row?.content);
+        out.brainTarget = Boolean(out.brainTargetValue);
       }
     } catch (e) { L.bad('cannot use the database', explainDbError(e, { user: dbUser(c.DATABASE_URL) })); }
     finally { await pg?.close?.().catch?.(() => {}); }
@@ -228,12 +230,24 @@ async function rest(L, c, has, deps) {
 }
 
 // The business numbers: where the target comes from, the ceiling, and whether the optimizer is on.
+// An amount as the check read it, in the account currency when the account was read, so a typo
+// (1.25 for 1250) is visible.
+export function shownAmount(n, currency) {
+  const whole = Math.abs(n - Math.round(n)) < 0.005;
+  const digits = { minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: whole ? 0 : 2 };
+  if (currency) {
+    try { return new Intl.NumberFormat('en-US', { style: 'currency', currency, ...digits }).format(n); } catch { /* unknown code */ }
+  }
+  return `${n.toLocaleString('en-US', digits)}${currency ? ` ${currency}` : ' (in the ad account\'s currency)'}`;
+}
+
 function numbers(L, r, c) {
   L.head('Your numbers');
-  if (r.brainTarget) L.ok(`target cost per result: set in the brain (policy/target)${c.TARGET_COST_PER_RESULT ? ', which overrides TARGET_COST_PER_RESULT' : ''}`);
-  else if (c.TARGET_COST_PER_RESULT) L.ok('target cost per result: set in TARGET_COST_PER_RESULT');
+  const show = (n) => shownAmount(Number(n), r.currency);
+  if (r.brainTarget) L.ok(`target cost per result: ${show(r.brainTargetValue)}, set in the brain (policy/target)${c.TARGET_COST_PER_RESULT ? ', which overrides TARGET_COST_PER_RESULT' : ''}`);
+  else if (c.TARGET_COST_PER_RESULT) L.ok(`target cost per result: ${show(c.TARGET_COST_PER_RESULT)}, from TARGET_COST_PER_RESULT`);
   else if (r.targetUnset) L.warn('no target cost per result', 'the optimizer proposes nothing until one is set, in TARGET_COST_PER_RESULT or by an operator in Slack (brain set policy/target)');
-  if (c.MAX_DAILY_BUDGET) L.ok('daily budget ceiling: set in MAX_DAILY_BUDGET');
+  if (c.MAX_DAILY_BUDGET) L.ok(`daily budget ceiling: ${show(c.MAX_DAILY_BUDGET)}, from MAX_DAILY_BUDGET`);
   else if (r.ceilingUnset) L.warn('MAX_DAILY_BUDGET is not set', 'every budget change (approvals and orders) is refused until it is set');
   if (c.OPTIMIZER_ENABLED === false) L.warn('the optimizer is off (OPTIMIZER_ENABLED=false)', 'it proposes nothing: no timer, no npm run job -- optimizer, no optimize in Slack');
 }

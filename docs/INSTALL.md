@@ -48,9 +48,10 @@ it.
     also the way on a machine where you cannot install anything.
 - **You use Docker Compose:** skip this step; `docker compose up` brings its own Postgres (step 8).
 
-On your own Postgres, create a user and a database for the agent. Open `psql` as the Postgres admin
-user (`sudo -u postgres psql` on Linux; on a Mac with Postgres.app, double click a database in its
-window) and run, with a password of your own:
+On your own Postgres, create a user and a database for the agent. Run this as the Postgres admin
+user, in `psql` (`sudo -u postgres psql` on Linux; on a Mac with Postgres.app, double click a
+database in its window) or in any SQL console (a hosted provider's web console works), with a
+password of your own:
 
 ```sql
 CREATE ROLE agent LOGIN PASSWORD 'choose-a-password';
@@ -217,7 +218,8 @@ optional can stay missing. The token is shown once: copy it into
 **3.5 The ids.**
 
 - `META_AD_ACCOUNT_ID`: in Ads Manager, the number after `act=` in the address bar. Write it as
-  `act_1234567890` (the `act_` is added for you if you leave it out).
+  `act_1234567890` (the `act_` is added for you if you leave it out). If you paste the whole
+  Ads Manager link, the check names the number in it.
 - `META_PAGE_ID`: Business settings > Accounts > Pages, or the Page's About section.
 - `META_PIXEL_ID`: Events Manager > Data sources, the dataset id.
 - The Instagram account is found from the Page; set `META_IG_USER_ID` only if that fails.
@@ -324,14 +326,14 @@ Claude
 OK    the key works and can use claude-opus-5-5
 
 Your numbers
-OK    target cost per result: set in TARGET_COST_PER_RESULT
-OK    daily budget ceiling: set in MAX_DAILY_BUDGET
+OK    target cost per result: €40, from TARGET_COST_PER_RESULT
+OK    daily budget ceiling: €1,500, from MAX_DAILY_BUDGET
 
 1 thing to fix. Fix it and run npm run check again.
 ```
 
-It exits with an error while any line says FIX. "Your numbers" says where the target comes from (the
-setting, or the brain when an operator set it in Slack) and warns when the target or the ceiling is
+It exits with an error while any line says FIX. "Your numbers" shows the target and the ceiling as it read them, in the account's
+currency, and where the target comes from (the setting, or the brain when an operator set it in Slack) and warns when the target or the ceiling is
 missing or the optimizer is turned off; then a last line says what stays off until they are set.
 
 ## 7. First day: the brain and a dry run
@@ -390,6 +392,8 @@ After=network-online.target
 
 [Service]
 WorkingDirectory=/srv/meta-ads-command-center
+# the full path to npm: the output of `which npm` on this machine (nvm and other
+# installers put it somewhere else than /usr/bin/npm)
 ExecStart=/usr/bin/npm start
 Restart=always
 User=agent
@@ -451,6 +455,9 @@ connects. When the database stops answering, it answers 503 with `not ok` and
 | `connected` | working |
 | `reconnecting` | the connection dropped and is coming back on its own |
 | `disconnected` | the connection is closed (the process is stopping) |
+
+The database line is `starting` in the first seconds of a start, before the database is connected,
+then `ok`, or `not answering` (with the 503).
 
 With the header `x-health-secret` set to `HEALTH_SECRET`, it returns JSON instead: `ok`, `slack`
 (the state), `database`, `reason` (when not ok), `started_at`, `jobs` (each job's last run and

@@ -33,7 +33,7 @@ A change to any setting takes effect when the process restarts.
 
 | Setting | Default | What |
 |---|---|---|
-| `TARGET_COST_PER_RESULT` | not set | What one result is worth paying for. Every guardrail is a multiple of it. The optimizer proposes nothing until there is one. An operator can also set it in Slack (`brain set policy/target 40`), and then the brain's value wins; `status` and the check say which one is in use. `1250` and `1,250` both work; a currency symbol is ignored. |
+| `TARGET_COST_PER_RESULT` | not set | What one result is worth paying for. Every guardrail is a multiple of it. The optimizer proposes nothing until there is one. An operator can also set it in Slack (`brain set policy/target 40`), and then the brain's value wins; `status` and the check say which one is in use. `1250` and `1,250` both work; a currency symbol is ignored. `1.250` is refused, because it could mean 1250 or 1.25; the check shows the amount it read. |
 | `MAX_DAILY_BUDGET` | not set | The ceiling on the total daily budget across everything in scope. Every budget write (approvals and confirmed orders) is refused if it would take one budget, or the total, above it. While it is not set, budget changes are turned off. Only this setting sets it, on purpose: nobody can raise it from Slack. |
 
 Both are in the ad account's own currency. The agent reads the currency from the ad account and

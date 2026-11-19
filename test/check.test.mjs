@@ -161,14 +161,14 @@ test('the check reports owned tables as one red line, never as missing', async (
 test('a target in the brain is named as the source, with no warning that it is missing', async () => {
   const env = { ...BASE_ENV, TARGET_COST_PER_RESULT: '', META_ACCESS_TOKEN: '', META_AD_ACCOUNT_ID: '', SLACK_BOT_TOKEN: '', SLACK_APP_TOKEN: '', ANTHROPIC_API_KEY: '' };
   let r = await runCheck(env, { pg: async () => fakePg({ brainTarget: 40 }) });
-  assert.match(r.text, /Your numbers\nOK    target cost per result: set in the brain \(policy\/target\)\n/);
+  assert.match(r.text, /Your numbers\nOK    target cost per result: 40 \(in the ad account's currency\), set in the brain \(policy\/target\)\n/);
   assert.ok(!/WARN.*target/i.test(r.text), r.text);
   r = await runCheck({ ...env, TARGET_COST_PER_RESULT: '150' }, { pg: async () => fakePg({ brainTarget: '45' }) });
   assert.match(r.text, /set in the brain \(policy\/target\), which overrides TARGET_COST_PER_RESULT/);
   r = await runCheck(env, { pg: async () => fakePg({ brainTarget: 'soon' }) });
   assert.match(r.text, /WARN  no target cost per result: the optimizer proposes nothing until one is set/);
   r = await runCheck({ ...env, TARGET_COST_PER_RESULT: '150' }, { pg: async () => fakePg() });
-  assert.match(r.text, /OK    target cost per result: set in TARGET_COST_PER_RESULT/);
+  assert.match(r.text, /OK    target cost per result: 150 \(in the ad account's currency\), from TARGET_COST_PER_RESULT/);
 });
 
 test('the check says when the optimizer is turned off', async () => {
@@ -201,4 +201,12 @@ test('tables from before an upgrade are named, and only their owner can add what
   r = await runCheck(SECRETS, deps({ upgraded: false, owner: 'dbadmin' }));
   assert.equal(r.ok, false);
   assert.match(r.text, /FIX   tables: the tables need an upgrade [\s\S]*only their owner, dbadmin, can add it/);
+});
+
+test('the numbers section shows the target and the ceiling it read, in the account currency', async () => {
+  const r = await runCheck({ ...ENV, TARGET_COST_PER_RESULT: '40', MAX_DAILY_BUDGET: '1,500' }, okDeps());
+  assert.match(r.text, /OK    target cost per result: €40, from TARGET_COST_PER_RESULT/);
+  assert.match(r.text, /OK    daily budget ceiling: €1,500, from MAX_DAILY_BUDGET/);
+  const r2 = await runCheck({ ...ENV, TARGET_COST_PER_RESULT: '1.25', MAX_DAILY_BUDGET: '1,500' }, okDeps());
+  assert.match(r2.text, /target cost per result: €1\.25, from/);
 });

@@ -57,8 +57,18 @@ export function money(v) {
 // A number typed by a person ("1,250", "$1250", "£ 480", "12.50") as an amount. Null when it is
 // not one. A comma only separates thousands (1,250 or 1,250,000.50): "12,5" is refused rather
 // than read as 125, because in many countries it means 12.5.
+// "1.250" (one dot, exactly three digits after it, nothing else) reads as 1.25 in some countries
+// and 1250 in others, so it is refused rather than guessed. Returns the message, or null.
+export function ambiguousAmount(v) {
+  if (v == null || typeof v === 'number') return null;
+  const s = String(v).replace(/[\p{Sc}\s]/gu, '');
+  if (!/^\d{1,3}\.\d{3}$/.test(s)) return null;
+  return `"${String(v).trim()}" can be read two ways: write ${s.replace('.', '')} for the thousands (no dot), or ${Number(s)} for the decimal`;
+}
+
 export function parseAmountText(v) {
   if (v == null) return null;
+  if (ambiguousAmount(v)) return null;
   const s = String(v).replace(/[\p{Sc}\s]/gu, '');
   if (!/^(\d+|\d{1,3}(,\d{3})+)(\.\d+)?$/.test(s)) return null;
   const n = Number(s.replace(/,/g, ''));

@@ -49,6 +49,23 @@ export function actionTypeFor(event, override = null) {
   return lookup(PIXEL_ACTIONS, e) || lookup(CONVERSION_EVENTS, e) || null;
 }
 
+const knownEvent = (s) => Boolean(lookup(PIXEL_ACTIONS, s) || lookup(CONVERSION_EVENTS, s));
+// "Purchase,Lead", "Schedule and Lead", "Purchase Lead": a list where one event goes.
+export function severalEvents(event) {
+  const e = String(event || '').trim();
+  if (!e || /^\d+$/.test(e) || knownEvent(e)) return null;
+  const parts = e.split(/\s*(?:[,;|+&/]|\s(?:and|or)\s)\s*/i).filter(Boolean);
+  const words = e.split(/\s+/).filter(Boolean);
+  if (parts.length > 1 || words.filter(knownEvent).length >= 2) return parts.length > 1 ? parts : words;
+  return null;
+}
+export function severalEventsProblem(event, which = 'RESULT') {
+  const list = severalEvents(event);
+  if (!list) return null;
+  const second = which === 'RESULT' ? ', and a second one can go in SECONDARY_EVENT' : '';
+  return `names more than one event (${list.join(', ')}); it takes one event only. Pick one, for example Schedule, Lead, Purchase or CompleteRegistration (the full list is in docs/SETTINGS.md)${second}`;
+}
+
 // Why an event cannot be counted as given, or null. `which` is RESULT or SECONDARY.
 export function eventProblem(event, override, which = 'RESULT') {
   if (!event || override) return null;
