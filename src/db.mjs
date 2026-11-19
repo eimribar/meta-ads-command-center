@@ -4,12 +4,13 @@
 //   select(table, { where, order, limit, columns })   -> rows
 //   insert(table, rows)                               -> inserted rows
 //   insertIgnore(table, row, conflict)                -> inserted row, or null when it already existed
+//                                                        (conflict null: any unique index)
 //   upsert(table, rows, conflict)                     -> rows (only the given columns are updated)
 //   update(table, where, patch)                       -> updated rows
 //   remove(table, where)                              -> removed rows
 //
 // `where` maps a column to a value (equality) or to one operator object:
-//   { in: [...] } { gte } { gt } { lte } { lt } { ne } { isNull: true|false }
+//   { in: [...] } { gte } { gt } { lte } { lt } { ne } { isNull: true|false } { prefix: 'text' }
 // `order` is 'column' or 'column desc', or a list of them.
 
 // Tables whose rows get a numeric `id` from the database.
@@ -42,6 +43,7 @@ function whereSql(where = {}, params = []) {
     if (cond !== null && typeof cond === 'object' && !Array.isArray(cond) && !(cond instanceof Date)) {
       if ('in' in cond) { params.push(cond.in); parts.push(`${c} = any($${params.length})`); continue; }
       if ('isNull' in cond) { parts.push(`${c} is ${cond.isNull ? '' : 'not '}null`); continue; }
+      if ('prefix' in cond) { params.push(`${String(cond.prefix).replace(/[\\%_]/g, (m) => `\\${m}`)}%`); parts.push(`${c} like $${params.length}`); continue; }
       const [op, val] = Object.entries(cond)[0] || [];
       if (!OPS[op]) throw new Error(`bad operator for ${col}`);
       params.push(val); parts.push(`${c} ${OPS[op]} $${params.length}`);
@@ -174,6 +176,7 @@ function matches(row, where = {}) {
     if (cond !== null && typeof cond === 'object' && !Array.isArray(cond) && !(cond instanceof Date)) {
       if ('in' in cond) { if (!cond.in.map(String).includes(String(v))) return false; continue; }
       if ('isNull' in cond) { if ((v == null) !== Boolean(cond.isNull)) return false; continue; }
+      if ('prefix' in cond) { if (!String(v ?? '').startsWith(String(cond.prefix))) return false; continue; }
       const [op, val] = Object.entries(cond)[0];
       if (v == null) return false;
       if (op === 'gte' && !(v >= val)) return false;
@@ -187,6 +190,12 @@ function matches(row, where = {}) {
   return true;
 }
 
+// The partial unique indexes in db/schema.sql, for the in-memory database: one open card per
+// decision key.
+const PARTIAL_UNIQUE = {
+  actions_log: [{ columns: ['decision_key'], when: (r) => ['proposed', 'escalated'].includes(r.disposition) && r.decision_key != null }],
+};
+
 export function createMemoryDb(seed = {}) {
   const tables = {};
   const ids = {};
@@ -199,6 +208,8 @@ export function createMemoryDb(seed = {}) {
     return r;
   };
   const sameKey = (a, b, conflict) => conflict.every((c) => String(a[c]) === String(b[c]));
+  const violates = (table, row) => (PARTIAL_UNIQUE[table] || []).some((u) => u.when(row) && t(table).some((r) => u.when(r) && sameKey(r, row, u.columns)));
+  const uniqueError = (table) => Object.assign(new Error(`duplicate key value violates unique constraint on ${table}`), { code: '23505' });
   for (const [name, rows] of Object.entries(seed)) for (const r of rows) t(name).push(stamp(name, r));
   return {
     kind: 'memory',
@@ -224,12 +235,17 @@ export function createMemoryDb(seed = {}) {
       return columns ? rows.map((r) => Object.fromEntries(columns.map((c) => [c, r[c]]))) : rows;
     },
     insert: async (table, rows) => {
-      const out = (Array.isArray(rows) ? rows : [rows]).map((r) => stamp(table, r));
-      t(table).push(...out);
+      const out = [];
+      for (const r of Array.isArray(rows) ? rows : [rows]) {
+        if (violates(table, r)) throw uniqueError(table);
+        const row = stamp(table, r);
+        t(table).push(row);
+        out.push(row);
+      }
       return clone(out);
     },
     insertIgnore: async (table, row, conflict) => {
-      if (t(table).some((r) => sameKey(r, row, conflict))) return null;
+      if (conflict ? t(table).some((r) => sameKey(r, row, conflict)) : violates(table, row)) return null;
       const r = stamp(table, row);
       t(table).push(r);
       return clone(r);

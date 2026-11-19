@@ -12,9 +12,14 @@ export const TABLES = ['brain', 'brain_history', 'conversations', 'actions_log',
 
 export const schemaSql = () => readFile(join(root, 'db', 'schema.sql'), 'utf8');
 
+// Columns and indexes added after the first release. When one is missing, the schema file is
+// applied again (npm run db:setup, or npm start when this user owns the tables).
+export const UPGRADES = { columns: [['actions_log', 'journal_id']], indexes: ['actions_log_one_open'] };
+
 // Which tables exist, who owns them and whether this user can use them. Read from pg_class,
 // which lists every table, so a table this user has no rights on is not taken for missing.
-//   { user, canCreate, missing: [names], noAccess: [{ name, owner }], owners: [names], ownedByOthers: bool }
+//   { user, canCreate, missing: [names], noAccess: [{ name, owner }], owners: [names], ownedByOthers: bool,
+//     upgrade: [what an upgrade adds that is not there yet] }
 export async function tableStatus(d) {
   const [who] = await d.query("select current_user as me, has_schema_privilege(coalesce(current_schema(), 'public'), 'CREATE') as can_create");
   const user = who?.me || null;
@@ -27,7 +32,18 @@ export async function tableStatus(d) {
   const missing = TABLES.filter((t) => !present.has(t));
   const noAccess = rows.filter((r) => !r.can_use).map((r) => ({ name: r.name, owner: r.owner }));
   const owners = [...new Set(rows.map((r) => r.owner))];
-  return { user, canCreate: who?.can_create !== false, missing, noAccess, owners, ownedByOthers: rows.some((r) => r.owner !== user) };
+  const upgrade = [];
+  const tablesWithUpgrades = [...new Set(UPGRADES.columns.map(([t]) => t))].filter((t) => present.has(t));
+  if (tablesWithUpgrades.length) {
+    const cols = await d.query(`select table_name, column_name from information_schema.columns
+      where table_schema = current_schema() and table_name = any($1)`, [tablesWithUpgrades]);
+    const have = new Set(cols.map((c) => `${c.table_name}.${c.column_name}`));
+    for (const [t, c] of UPGRADES.columns) if (present.has(t) && !have.has(`${t}.${c}`)) upgrade.push(`the column ${t}.${c}`);
+    const idx = await d.query('select indexname from pg_indexes where schemaname = current_schema() and indexname = any($1)', [UPGRADES.indexes]);
+    const haveIdx = new Set(idx.map((i) => i.indexname));
+    for (const i of UPGRADES.indexes) if (!haveIdx.has(i)) upgrade.push(`the index ${i}`);
+  }
+  return { user, canCreate: who?.can_create !== false, missing, noAccess, owners, ownedByOthers: rows.some((r) => r.owner !== user), upgrade };
 }
 
 export async function missingTables(d) { return (await tableStatus(d)).missing; }
@@ -71,7 +87,7 @@ export function ownerFix(owner, user, tables = TABLES) {
 // After an upgrade, when the tables belong to another user: the owner runs the schema file.
 export function upgradeFix(owner) {
   return `after an upgrade, ${owner} (or a database admin connected as ${owner}) runs db/schema.sql in this database, `
-    + `for example psql -d <database> -f db/schema.sql, because only the owner can add tables and columns. `
+    + `for example psql -d <database> -f db/schema.sql, because only the owner can add tables, columns and indexes. `
     + 'With the default privileges from docs/INSTALL.md, step 2, this user can use the new tables right away.';
 }
 
@@ -85,41 +101,47 @@ export function createFix(user) {
 
 // One line on the tables, for the check and for npm run db:setup.
 //   { level: 'ok' | 'warn' | 'bad', what, fix }
+// Tables (or upgrade columns) this user can create are a warning: npm start or npm run db:setup
+// adds them. What only another database user can add is a problem to fix first.
 export function describeTables(s) {
   if (s.noAccess.length) {
     const owner = s.noAccess[0].owner;
     const n = s.noAccess.length;
     return { level: 'bad', what: `${n} of the tables ${n === 1 ? 'exists but belongs' : 'exist but belong'} to the database user ${owner}, and this user (${s.user}) cannot read and write ${n === 1 ? 'it' : 'them'}`, fix: ownerFix(owner, s.user, s.noAccess.map((t) => t.name)) };
   }
-  const setupFix = 'run npm run db:setup (npm start also creates them when this user can)';
+  const setupFix = 'npm start creates them, or run npm run db:setup';
+  const others = s.owners.filter((o) => o !== s.user);
+  const some = (list) => `${list.slice(0, 5).join(', ')}${list.length > 5 ? ', ...' : ''}`;
   if (s.missing.length && !s.canCreate) {
     const what = s.missing.length === TABLES.length ? 'the tables are not there yet, and this user cannot create them'
-      : `${s.missing.length} of the ${TABLES.length} tables ${s.missing.length === 1 ? 'is' : 'are'} missing (${s.missing.slice(0, 5).join(', ')}${s.missing.length > 5 ? ', ...' : ''}), and this user cannot create ${s.missing.length === 1 ? 'it' : 'them'}`;
-    const others = s.owners.filter((o) => o !== s.user);
+      : `${s.missing.length} of the ${TABLES.length} tables ${s.missing.length === 1 ? 'is' : 'are'} missing (${some(s.missing)}), and this user cannot create ${s.missing.length === 1 ? 'it' : 'them'}`;
     return { level: 'bad', what, fix: others.length ? upgradeFix(others[0]) : createFix(s.user) };
   }
-  if (s.missing.length === TABLES.length) return { level: 'bad', what: 'the tables are not there yet', fix: setupFix };
-  if (s.missing.length) return { level: 'bad', what: `${s.missing.length} of the ${TABLES.length} tables ${s.missing.length === 1 ? 'is' : 'are'} missing (${s.missing.slice(0, 5).join(', ')}${s.missing.length > 5 ? ', ...' : ''})`, fix: setupFix };
+  if (s.missing.length === TABLES.length) return { level: 'warn', what: 'the tables are not there yet', fix: setupFix };
+  if (s.missing.length) return { level: 'warn', what: `${s.missing.length} of the ${TABLES.length} tables ${s.missing.length === 1 ? 'is' : 'are'} missing (${some(s.missing)})`, fix: setupFix };
+  const upgrade = s.upgrade || [];
+  if (upgrade.length && s.ownedByOthers) return { level: 'bad', what: `the tables need an upgrade (${some(upgrade)}), and only their owner, ${others[0]}, can add it`, fix: upgradeFix(others[0]) };
+  if (upgrade.length) return { level: 'warn', what: `the tables need an upgrade (${some(upgrade)})`, fix: 'npm start adds it, or run npm run db:setup' };
   if (s.ownedByOthers) {
-    const others = s.owners.filter((o) => o !== s.user);
     return { level: 'warn', what: `every table exists and this user can use them; they belong to ${others.join(', ')}`, fix: upgradeFix(others[0]) };
   }
   return { level: 'ok', what: 'every table exists and this user can use them' };
 }
 
-// Create the missing tables, if any. Returns { created: [...] }; throws with the fix when this
-// database user cannot create or use them.
+// Create the missing tables and add what an upgrade added, if anything. Returns { created: [...],
+// upgraded: [...] }; throws with the fix when this database user cannot create or use them.
 export async function ensureTables(d, { user } = {}) {
   const s = await tableStatus(d);
   const line = describeTables(s);
-  if (s.noAccess.length) throw new Error(`${line.what}. Fix: ${line.fix}`);
-  if (!s.missing.length) return { created: [] };
-  if (!s.canCreate) throw new Error(`${line.what}. Fix: ${line.fix}`);
+  if (line.level === 'bad') throw new Error(`${line.what}. Fix: ${line.fix}`);
+  const upgrade = s.upgrade || [];
+  if (!s.missing.length && !upgrade.length) return { created: [], upgraded: [] };
   try { await applySchema(d); }
   catch (e) {
-    throw new Error(`${plural(s.missing.length, 'table')} ${s.missing.length === 1 ? 'is' : 'are'} missing and could not be created: ${explainDbError(e, { user: s.user || user, owner: s.owners.find((o) => o !== s.user) })}`);
+    const what = s.missing.length ? `${plural(s.missing.length, 'table')} ${s.missing.length === 1 ? 'is' : 'are'} missing and could not be created` : 'the tables need an upgrade that could not be applied';
+    throw new Error(`${what}: ${explainDbError(e, { user: s.user || user, owner: s.owners.find((o) => o !== s.user) })}`);
   }
-  return { created: s.missing };
+  return { created: s.missing, upgraded: upgrade };
 }
 
 // One plain sentence on what went wrong and what to do. Never includes the connection string.

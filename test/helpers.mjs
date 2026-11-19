@@ -7,7 +7,7 @@ import { setPolicy } from '../src/optimizer/policy.mjs';
 import { resetMetaCaches } from '../src/meta.mjs';
 import { clearBrainCache } from '../src/brain.mjs';
 import { setCurrency } from '../src/money.mjs';
-import { TABLES } from '../src/schema.mjs';
+import { TABLES, UPGRADES } from '../src/schema.mjs';
 
 export const BASE_ENV = {
   META_ACCESS_TOKEN: 'test-meta-token',
@@ -37,24 +37,28 @@ export function setup(env = {}, { seed = {} } = {}) {
   clearBrainCache();
   const db = createMemoryDb(seed);
   setCurrency('USD');
-  setRuntime({ db, slack: null, anthropic: null, fetch: () => { throw new Error('no network in tests'); }, now: () => new Date() });
+  setRuntime({ db, slack: null, anthropic: null, fetch: () => { throw new Error('no network in tests'); }, now: () => new Date(), sleep: async () => {} });
   return { db, config };
 }
 
 // A Postgres that answers the queries the check, db:setup and boot send about the tables:
 // tables (names present), owner (their owner), user (who is connected), canUse (privileges),
-// canCreate (may create tables in the schema), brainTarget (the policy/target row, or undefined).
-export function fakePg({ tables = TABLES, owner = 'agent', user = 'agent', canUse = true, canCreate = true, brainTarget, sslMode = 'require', onApply = null } = {}) {
+// canCreate (may create tables in the schema), brainTarget (the policy/target row, or undefined),
+// upgraded (false: the columns and indexes added after the first release are missing).
+export function fakePg({ tables = TABLES, owner = 'agent', user = 'agent', canUse = true, canCreate = true, brainTarget, sslMode = 'require', onApply = null, upgraded = true } = {}) {
   const sent = [];
   return {
     sslMode,
     sent,
     query: async (sql) => {
       sent.push(sql);
+      // the schema file itself (it also mentions the catalog tables below)
+      if (/create table if not exists/i.test(sql)) { if (onApply) return onApply(); return []; }
       if (/select current_user/.test(sql)) return [{ me: user, can_create: canCreate }];
       if (/from pg_class/.test(sql)) return tables.map((name) => ({ name, owner, can_use: canUse }));
+      if (/from information_schema.columns/.test(sql)) return upgraded ? UPGRADES.columns.map(([t, c]) => ({ table_name: t, column_name: c })) : [];
+      if (/from pg_indexes/.test(sql)) return upgraded ? UPGRADES.indexes.map((i) => ({ indexname: i })) : [];
       if (/from brain where/.test(sql)) return brainTarget === undefined ? [] : [{ content: brainTarget }];
-      if (/create table if not exists/i.test(sql)) { if (onApply) return onApply(); return []; }
       throw new Error(`fakePg: unexpected query ${sql.slice(0, 60)}`);
     },
     close: async () => {},
@@ -72,7 +76,14 @@ export function fakeGraph(handler) {
     delete params.access_token;
     calls.push({ method, path, params });
     const body = await handler({ method, path, params });
-    return { ok: true, status: 200, json: async () => body };
+    // A handler can answer at the HTTP level: { http: { status, headers, body } } (body may be a
+    // string, which is not JSON).
+    if (body?.http) {
+      const { status = 200, headers = {}, body: b } = body.http;
+      const h = new Map(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
+      return { ok: status < 400, status, headers: { get: (k) => h.get(String(k).toLowerCase()) ?? null }, json: async () => (typeof b === 'string' ? JSON.parse(b) : b) };
+    }
+    return { ok: true, status: 200, headers: { get: () => null }, json: async () => body };
   };
   setRuntime({ fetch });
   return calls;
@@ -101,3 +112,22 @@ export function fakeClaude(script) {
 
 export const text = (t) => ({ content: [{ type: 'text', text: t }], stop_reason: 'end_turn' });
 export const toolUse = (id, name, input, extra = []) => ({ content: [...extra, { type: 'tool_use', id, name, input }], stop_reason: 'tool_use' });
+
+// A stand-in for the Slack Web API that records every call.
+export function fakeSlack() {
+  const calls = [];
+  let ts = 1000;
+  const rec = (name) => async (args) => { calls.push({ name, args }); return { ok: true, ts: String(ts++), channel: args?.channel || 'CTEST' }; };
+  return {
+    calls,
+    chat: { postMessage: rec('chat.postMessage'), update: rec('chat.update'), postEphemeral: rec('chat.postEphemeral') },
+    pins: { add: rec('pins.add'), remove: rec('pins.remove') },
+    views: { open: rec('views.open'), publish: rec('views.publish') },
+  };
+}
+
+// A stand-in for a Bolt app: collects the handlers so the test can fire them.
+export function fakeApp() {
+  const actions = {}, views = {};
+  return { actions, views, action: (id, fn) => { actions[id] = fn; }, view: (id, fn) => { views[id] = fn; } };
+}

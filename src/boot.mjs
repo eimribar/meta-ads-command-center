@@ -26,6 +26,7 @@ export async function boot({ slack = false, meta = true } = {}) {
     try { r = await ensureTables(d, { user: dbUser(cfg.DATABASE_URL) }); }
     catch (e) { throw new Error(`Database: ${e.message}`); }
     if (r.created.length) console.log(`[db] created ${plural(r.created.length, 'missing table')}`);
+    if (r.upgraded?.length) console.log(`[db] upgraded the tables: added ${r.upgraded.join(', ')}`);
   }
   let tz = cfg.TIMEZONE;
   if (meta) {

@@ -122,3 +122,40 @@ test('one table this user cannot use is named in the singular', async () => {
   assert.match(line.fix, /ALTER TABLE brain OWNER TO agent;/);
   assert.ok(!/ALTER TABLE state OWNER/.test(line.fix), 'only the tables it cannot use');
 });
+
+test('a prefix filter is escaped LIKE in SQL and startsWith in memory', async () => {
+  assert.deepEqual(buildSelect('state', { where: { key: { prefix: 'seen/a_b%' } } }), { sql: 'select * from "state" where "key" like $1', params: ['seen/a\\_b\\%%'] });
+  const d = createMemoryDb({ state: [{ key: 'seen/x', value: 1 }, { key: 'order/y', value: 2 }] });
+  assert.deepEqual((await d.select('state', { where: { key: { prefix: 'seen/' } } })).map((r) => r.key), ['seen/x']);
+});
+
+test('the in-memory database keeps one open card per move, like the unique index', async () => {
+  const d = createMemoryDb();
+  const card = { run_date: '2026-11-19', action_type: 'pause_ad', target_id: '30', decision_key: 'pause:30', disposition: 'proposed' };
+  assert.ok(await d.insertIgnore('actions_log', card, null));
+  assert.equal(await d.insertIgnore('actions_log', { ...card, disposition: 'escalated' }, null), null);
+  await assert.rejects(() => d.insert('actions_log', [card]), (e) => e.code === '23505');
+  assert.ok(await d.insertIgnore('actions_log', { ...card, disposition: 'auto_applied' }, null), 'closed rows are not limited');
+  assert.equal(buildInsert('actions_log', [card], { mode: 'ignore' }).sql.includes('on conflict do nothing'), true);
+});
+
+test('tables from before an upgrade are upgraded by npm start or db:setup when this user owns them', async () => {
+  let applied = 0;
+  const pg = fakePg({ upgraded: false, onApply: () => { applied++; return []; } });
+  const s = await tableStatus(pg);
+  assert.deepEqual(s.upgrade, ['the column actions_log.journal_id', 'the index actions_log_one_open']);
+  assert.equal(describeTables(s).level, 'warn');
+  const r = await ensureTables(pg);
+  assert.deepEqual(r, { created: [], upgraded: ['the column actions_log.journal_id', 'the index actions_log_one_open'] });
+  assert.equal(applied, 1);
+  assert.deepEqual(await ensureTables(fakePg()), { created: [], upgraded: [] }, 'nothing to do on a current database');
+  await assert.rejects(() => ensureTables(fakePg({ upgraded: false, owner: 'dbadmin', user: 'agent' })), /only their owner, dbadmin, can add it/);
+});
+
+test('the schema upgrade runs only what is missing and closes older duplicate open cards first', async () => {
+  const { readFileSync } = await import('node:fs');
+  const sql = readFileSync(new URL('../db/schema.sql', import.meta.url), 'utf8');
+  assert.match(sql, /journal_id\s+bigint/);
+  assert.match(sql, /if not exists \(select 1 from information_schema\.columns[\s\S]*alter table actions_log add column journal_id bigint/);
+  assert.match(sql, /close_reason = 'duplicate'[\s\S]*create unique index actions_log_one_open on actions_log \(decision_key\)\s+where disposition in \('proposed', 'escalated'\)/);
+});

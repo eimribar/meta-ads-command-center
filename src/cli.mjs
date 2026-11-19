@@ -75,16 +75,21 @@ async function main() {
       d = await createPgDb(cfg.DATABASE_URL, { ssl: cfg.DATABASE_SSL, ca: cfg.DATABASE_SSL_CA });
       s = await tableStatus(d);
       const line = describeTables(s);
-      // Tables this user cannot use, cannot create, or that only their owner may change: say so, change nothing.
-      if (s.noAccess.length || (s.missing.length && !s.canCreate)) { console.error(`Could not set up the tables: ${line.what}.\nFix: ${line.fix}`); return 1; }
-      if (!s.missing.length && s.ownedByOthers) {
+      const upgrade = s.upgrade || [];
+      // Tables this user cannot use, cannot create, or an upgrade only their owner may add: say so, change nothing.
+      if (line.level === 'bad') { console.error(`Could not set up the tables: ${line.what}.\nFix: ${line.fix}`); return 1; }
+      if (!s.missing.length && !upgrade.length && s.ownedByOthers) {
         const owner = s.owners.find((o) => o !== s.user);
         console.log(`All ${TABLES.length} tables are there and this user can use them; nothing changed (SSL: ${d.sslMode}).\n`
           + `They belong to ${owner}: ${upgradeFix(owner)}`);
         return 0;
       }
       await applySchema(d);
-      console.log(s.missing.length ? `Created ${plural(s.missing.length, 'table')}; all ${TABLES.length} are ready (SSL: ${d.sslMode}).` : `All ${TABLES.length} tables were already there; nothing changed (SSL: ${d.sslMode}).`);
+      const did = [
+        s.missing.length ? `Created ${plural(s.missing.length, 'table')}` : null,
+        upgrade.length ? `${s.missing.length ? 'added' : 'Upgraded the tables: added'} ${upgrade.join(', ')}` : null,
+      ].filter(Boolean);
+      console.log(did.length ? `${did.join('; ')}; all ${TABLES.length} are ready (SSL: ${d.sslMode}).` : `All ${TABLES.length} tables were already there; nothing changed (SSL: ${d.sslMode}).`);
       return 0;
     } catch (e) {
       console.error(`Could not set up the tables: ${explainDbError(e, { user: s?.user || dbUser(cfg.DATABASE_URL), owner: s?.owners?.find((o) => o !== s?.user) })}`);

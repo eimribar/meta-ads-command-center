@@ -44,12 +44,12 @@ create table if not exists actions_log (
   explain          text,
   guardrail_checks jsonb,
   autonomy_level   text,
-  disposition      text not null,          -- proposed | escalated | auto_applied | applied_by_human | skipped
+  disposition      text not null,          -- proposed | escalated | auto_applied | applied_by_human | unknown | skipped
   applied          boolean not null default false,
   applied_at       timestamptz,
   applied_by       text,
   escalated        boolean not null default false,
-  close_reason     text,                   -- human_reject | execution_needs_review | moot | expiry | undone
+  close_reason     text,                   -- human_reject | execution_needs_review | moot | expiry | duplicate | undone
   fail_key         text,
   decision_note    text,
   decision_key     text,
@@ -57,10 +57,31 @@ create table if not exists actions_log (
   card_ts          text,
   card_channel     text,
   undone_at        timestamptz,
-  undone_by        text
+  undone_by        text,
+  journal_id       bigint                  -- the write_journal row of the Meta write, once sent
 );
 create index if not exists actions_log_open on actions_log (disposition);
 create index if not exists actions_log_key on actions_log (decision_key);
+-- Added after the first release; an upgrade adds them. Each runs only when it is missing, so
+-- running this file again needs no more than the right to use the tables.
+do $$ begin
+  if not exists (select 1 from information_schema.columns
+                 where table_schema = current_schema() and table_name = 'actions_log' and column_name = 'journal_id') then
+    alter table actions_log add column journal_id bigint;
+  end if;
+end $$;
+-- One open card per move. Older duplicate open cards are closed before the index is made.
+do $$ begin
+  if not exists (select 1 from pg_indexes where schemaname = current_schema() and indexname = 'actions_log_one_open') then
+    update actions_log a set disposition = 'skipped', close_reason = 'duplicate', applied_by = 'upgrade',
+        decision_note = 'closed: a newer card for the same move is open'
+      where a.disposition in ('proposed', 'escalated') and a.decision_key is not null
+        and exists (select 1 from actions_log b where b.decision_key = a.decision_key
+                    and b.disposition in ('proposed', 'escalated') and b.id > a.id);
+    create unique index actions_log_one_open on actions_log (decision_key)
+      where disposition in ('proposed', 'escalated');
+  end if;
+end $$;
 
 -- The autonomy ladder: every action type starts on propose.
 create table if not exists autonomy_policy (
