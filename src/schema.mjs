@@ -8,7 +8,7 @@ import { plural } from './words.mjs';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 export const TABLES = ['brain', 'brain_history', 'conversations', 'actions_log', 'autonomy_policy', 'performance_daily', 'learnings',
-  'timeline', 'job_runs', 'loop_health', 'write_journal', 'incidents', 'state', 'moderation_log'];
+  'timeline', 'job_runs', 'loop_health', 'write_journal', 'incidents', 'state', 'moderation_log', 'decisions', 'hypotheses'];
 
 export const schemaSql = () => readFile(join(root, 'db', 'schema.sql'), 'utf8');
 

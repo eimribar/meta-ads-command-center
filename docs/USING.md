@@ -18,6 +18,8 @@ in a thread it started, or in a direct message. It also has a Home tab: click it
 | **Ladder** | Which kinds of moves wait for a person and which may happen on their own. Everything starts as waiting. |
 | **Threshold** | One of the numbers the agent judges ads by, like how much an ad may spend with no result before it is called a loser. Each is a multiple of the target. |
 | **Journal** | The agent's record of every change it sent to Meta. When Meta never answered one, the journal holds every later change until a person checks it. |
+| **Decision** | Something the team decided, kept with its reason, like "no budget changes during the spring launch, because we need one clean week to compare". The agent works within the active ones. |
+| **Hypothesis** | What the team believes works, or is testing, graded confirmed or refuted once the numbers settle it. |
 
 ## What it never does on its own
 
@@ -195,6 +197,51 @@ When the agent learns a lasting fact in conversation, it proposes a brain change
 Apply and Dismiss. When only the team can answer something, it asks with answer buttons.
 [PLAYBOOK.md](PLAYBOOK.md) lists the rows to write on day one.
 
+## Decisions and hypotheses
+
+The brain says what the business is. Decisions and hypotheses say what the team chose and what it
+is betting on, each with its reason, so the agent (and anyone who joins later) knows why things are
+the way they are. The agent, the optimizer and the daily report read the active decisions and the
+open hypotheses every time, so a decision made in a thread last month still counts today.
+
+```
+decisions                                               the active decisions (decisions all: every one)
+decision budget: no budget changes during the spring launch because we need one clean week to compare
+decision targeting: commuters and students because students matched in week two (replaces 3)
+decision 3 reversed because the launch is over
+hypotheses                                              the open hypotheses (hypotheses all: every one)
+hypothesis Theft angle brings cheaper test rides [audience=commuters, angle=theft]
+hypothesis test Short videos beat stills for test rides [format=video]
+hypothesis 7 confirmed because $92 a test ride against $150, 14 days
+```
+
+- **A decision needs its reason**, after `because`. Without it nothing is saved. The word before
+  the colon is an optional topic (one or two words, like `budget` or `targeting`).
+- **`(replaces 3)`** at the end marks decision 3 as replaced by the new one. `(brain business/offer)`
+  notes the brain row the decision changed. Both can go together: `(replaces 3, brain business/offer)`.
+- **Reversing** keeps the decision in `decisions all`, marked reversed, with the reason.
+- **Labels** in square brackets name the segment a hypothesis is about, in your team's words:
+  an audience, an angle, a format, a market. Any short `name=value` pairs work.
+- **`hypothesis test ...`** records a test that starts today. Grading it closes it.
+- **A grade** is `confirmed` or `refuted`, with the numbers after `because`. A graded hypothesis can
+  be graded again when the numbers change; the earlier verdict stays in the timeline.
+- Every one is saved with who wrote it, and the reply names them.
+
+**From the conversation.** When an operator states a decision in a thread, or says what they believe
+works, the agent puts it on a card with Record and Dismiss. Nothing is saved until an operator taps
+Record, and the operator who taps is kept as the one who decided. The same goes for a grade: when
+the numbers settle an open hypothesis, the agent proposes the verdict with the numbers. A decision
+without a reason never reaches a card; the agent asks for the why first.
+
+When the evidence argues against an active decision, the agent says so and names it by its number.
+Changing it stays with the team.
+
+**Your own results.** If your team keeps its own results in the database (for example what happened
+after the click: qualified leads, booked calls, sales by angle), name those tables or views in the
+brain row `context/result_views` and the agent reads them every turn, next to Meta's numbers, and
+says which number comes from where. See [SETTINGS.md](SETTINGS.md#brain-rows-the-code-reads).
+`status` and `npm run check` say when a named view is not set up.
+
 ## Commands
 
 Mention the agent (or DM it) with one of these. They answer at once, without the model:
@@ -205,7 +252,7 @@ Mention the agent (or DM it) with one of these. They answer at once, without the
 | `report` | yesterday's report now |
 | `scoreboard`, `scoreboard 14` | the 15 ads that spent most in the last 7 days (or 14), best first, ranked against the target |
 | `pending` | every card waiting, posted again |
-| `status` | what counts as a result, the target and where it comes from, the ceiling, the currency, the operators, changed thresholds, job health, open issues |
+| `status` | what counts as a result, the target and where it comes from, the ceiling, the currency, the operators, changed thresholds, how many decisions and hypotheses are open and whether each result view reads, job health, open issues |
 | `optimize` | look for moves now (the lighter run, not the full morning one): it posts cards in today's desk thread, and pauses ads on its own only if the ladder allows it |
 | `ladder` | which kinds of moves wait for a person and which happen on their own |
 | `ladder set pause auto` | let clear losing ads pause on their own |
@@ -213,6 +260,8 @@ Mention the agent (or DM it) with one of these. They answer at once, without the
 | `undo 14` | reverse the move with card number 14 (orders have no number: give the opposite order). An undo of a budget move is refused if the budget changed since that move. |
 | `freeze <why>`, `unfreeze` | stop the agent proposing moves (cards already posted still work), or let it start again |
 | `brain`, `brain set ...`, `brain rm ...` | see "The brain" above |
+| `decisions`, `decision ... because ...` | the active decisions, or record one (see "Decisions and hypotheses" above) |
+| `hypotheses`, `hypothesis ...` | the open hypotheses, record one, or grade one |
 | `thresholds` | every threshold and its value now |
 | `threshold pause.zeroResultSpend 4` | change one threshold (`default` instead of the number puts it back) |
 | `scan comments` | run the comment sweep now |
@@ -220,10 +269,11 @@ Mention the agent (or DM it) with one of these. They answer at once, without the
 | `journal clear 7` | clear number 7, after you checked it |
 
 **Who can use what.** Anyone can read: `help`, `report`, `scoreboard`, `pending`, `status`,
-`ladder`, `brain`, `thresholds` and `journal`. `report` only posts numbers, so anyone can ask for
-one. Everything else needs an operator, because it can change the account or the agent:
-`optimize` can pause ads on its own when pauses are set to automatic, `scan comments` hides
-comments on your Page, and the rest change the brain, the ladder, the thresholds or the freeze.
+`ladder`, `brain`, `thresholds`, `journal`, `decisions` and `hypotheses`. `report` only posts
+numbers, so anyone can ask for one. Everything else needs an operator, because it can change the
+account or the agent: `optimize` can pause ads on its own when pauses are set to automatic,
+`scan comments` hides comments on your Page, and the rest change the brain, the record, the ladder,
+the thresholds or the freeze.
 Anyone else who tries gets "That needs an operator", with how to become one.
 
 **Where the numbers come from:** a card's number is the `#14` at the bottom of the card; an

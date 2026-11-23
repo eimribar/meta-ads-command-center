@@ -179,12 +179,46 @@ from there. Small numbers move it a little; large numbers decide it.
 
 Most brain rows are free text the prompts read as written. `answers/<key>` rows are written by the
 answer buttons on a question the agent asked the team, and read back the next time the same
-question comes up. Three rows are read as data and checked when they are written:
+question comes up. Four rows are read as data and checked when they are written:
 
 | Row | What it must be |
 |---|---|
 | `policy/target` | A plain number in the ad account's currency, like `150`. |
 | `policy/thresholds` | JSON as above, or use the `threshold` command. |
 | `moderation/extra_posts` | Post ids separated by commas, like `123456789_987654321`. |
+| `context/result_views` | The team's own tables or views the agent reads every turn: names separated by commas, or JSON (below). |
 
 Any other `policy/...` row is refused, because nothing would read it.
+
+### Result views
+
+`context/result_views` names tables or views in the agent's own database that hold your team's
+results, for example what happened after the click: qualified leads, booked calls or sales, by
+angle or by channel. The chat agent and the optimizer read them every time, and the daily report's
+short read sees them too, next to Meta's numbers. Each entry is a name, or an object:
+
+| Field | What | Default |
+|---|---|---|
+| `name` | The table or view: lower case letters, digits and underscores. | required |
+| `date_column` | A date column. With it, only rows from the last `days` days are read, newest first. | none: the first rows, as they come |
+| `days` | How many days back, 1 to 90. | 14 |
+| `rows` | The most rows read, 1 to 200. | 50 |
+| `chars` | The most characters of this view put in front of the agent, 500 to 20000. Rows past it are left out, and the agent is told how many. | 6000 |
+| `order` | A column to sort by, optionally followed by `asc` or `desc`. | the date column, newest first |
+
+At most 6 views. For example:
+
+```
+brain set context/result_views [{"name":"daily_results","date_column":"day","days":14},{"name":"channel_results","date_column":"day"}]
+```
+
+or just the names: `brain set context/result_views daily_results, channel_results`.
+
+The agent's database user needs to read each one (`GRANT SELECT ON daily_results TO agent;`). A view
+that is missing or cannot be read is skipped, and the turn goes on without it. It opens an issue
+once (in `status`, the health check and the Home tab) that closes when the view reads again, and
+`npm run check` names it as not set up. The `result_view` chat tool reads the same views over
+another window ("channel results for the last 60 days"); anyone can use it.
+
+Keep personal data out of these views: counts and sums by day, angle or channel are what the agent
+needs. Whatever a view holds is sent to Claude with each question.

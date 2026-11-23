@@ -44,13 +44,15 @@ export function setup(env = {}, { seed = {} } = {}) {
 // A Postgres that answers the queries the check, db:setup and boot send about the tables:
 // tables (names present), owner (their owner), user (who is connected), canUse (privileges),
 // canCreate (may create tables in the schema), brainTarget (the policy/target row, or undefined),
-// upgraded (false: the columns and indexes added after the first release are missing).
-export function fakePg({ tables = TABLES, owner = 'agent', user = 'agent', canUse = true, canCreate = true, brainTarget, sslMode = 'require', onApply = null, upgraded = true } = {}) {
+// upgraded (false: the columns and indexes added after the first release are missing),
+// resultViews (the context/result_views row, or undefined), relations (the views that exist;
+// those in unreadable exist but this user may not read them).
+export function fakePg({ tables = TABLES, owner = 'agent', user = 'agent', canUse = true, canCreate = true, brainTarget, sslMode = 'require', onApply = null, upgraded = true, resultViews, relations = [], unreadable = [] } = {}) {
   const sent = [];
   return {
     sslMode,
     sent,
-    query: async (sql) => {
+    query: async (sql, params = []) => {
       sent.push(sql);
       // the schema file itself (it also mentions the catalog tables below)
       if (/create table if not exists/i.test(sql)) { if (onApply) return onApply(); return []; }
@@ -58,7 +60,9 @@ export function fakePg({ tables = TABLES, owner = 'agent', user = 'agent', canUs
       if (/from pg_class/.test(sql)) return tables.map((name) => ({ name, owner, can_use: canUse }));
       if (/from information_schema.columns/.test(sql)) return upgraded ? UPGRADES.columns.map(([t, c]) => ({ table_name: t, column_name: c })) : [];
       if (/from pg_indexes/.test(sql)) return upgraded ? UPGRADES.indexes.map((i) => ({ indexname: i })) : [];
+      if (/from brain where/.test(sql) && /result_views/.test(sql)) return resultViews === undefined ? [] : [{ content: resultViews }];
       if (/from brain where/.test(sql)) return brainTarget === undefined ? [] : [{ content: brainTarget }];
+      if (/to_regclass/.test(sql)) return params[0].map((name) => ({ name, found: relations.includes(name) || unreadable.includes(name), readable: relations.includes(name) }));
       throw new Error(`fakePg: unexpected query ${sql.slice(0, 60)}`);
     },
     close: async () => {},

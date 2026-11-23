@@ -9,6 +9,7 @@ import { policy, refreshPolicy } from './optimizer/policy.mjs';
 import { complete, textOf } from './reasoning.mjs';
 import { OPERATING_RULES, REPORT_RULES } from './prompts.mjs';
 import { brainBlock } from './brain.mjs';
+import { recordBlock, resultViewsBlock } from './record.mjs';
 import { openIncidents } from './jobs.mjs';
 import { money } from './money.mjs';
 
@@ -76,7 +77,7 @@ export async function buildDailyReport(day = daysAgo(1), { narrate = true } = {}
   if (narrate) {
     try {
       const msg = await complete({
-        system: [`${OPERATING_RULES}\n\n${REPORT_RULES}`, await brainBlock()],
+        system: [`${OPERATING_RULES}\n\n${REPORT_RULES}`, await brainBlock(), await recordBlock().catch(() => ''), await resultViewsBlock().catch(() => '')],
         messages: [{ role: 'user', content: JSON.stringify({ target, numbers: n, open: items }) }],
         maxTokens: 4000,
       });

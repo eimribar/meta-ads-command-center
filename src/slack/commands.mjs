@@ -1,6 +1,6 @@
 // Short commands that skip the chat model. Returns true when the text was a command.
 import { db } from '../runtime.mjs';
-import { isOperator, operators } from '../auth.mjs';
+import { isOperator, operators, LOCAL_OPERATOR } from '../auth.mjs';
 import { ladder, setLadder, undo } from '../optimizer/executor.mjs';
 import { listBrain, setBrain, rmBrain, parseContent, setThreshold } from '../brain.mjs';
 import { buildScoreboard, scoreboardText } from '../scoreboard.mjs';
@@ -14,6 +14,7 @@ import { money, currency } from '../money.mjs';
 import { getConfig } from '../config.mjs';
 import { OPTIMIZER_OFF } from '../scheduled.mjs';
 import { plural } from '../words.mjs';
+import { recordDecision, reverseDecision, listDecisions, recordHypothesis, gradeHypothesis, listHypotheses, decisionLine, hypothesisLine, recordStatus } from '../record.mjs';
 
 export const HELP = `*Commands* (mention me, DM me, or reply in one of my threads)
 • \`report\`: yesterday's report now · \`scoreboard\` or \`scoreboard 14\`: the top ads by spend, ranked against the target
@@ -22,6 +23,8 @@ export const HELP = `*Commands* (mention me, DM me, or reply in one of my thread
 • \`ladder\` · \`ladder set pause auto\` or \`ladder set pause ask\` (raises, trims and turning ads back on always ask)
 • \`undo 42\`: reverse the move numbered #42 on its card · \`freeze <why>\` / \`unfreeze\`: hold or resume the optimizer
 • \`brain\` · \`brain set business/company <text>\` · \`brain rm business/company\` (a row is named section/name)
+• \`decisions\` · \`decision <what> because <why>\` · \`decision 12 reversed because <why>\`
+• \`hypotheses\` · \`hypothesis <what you believe works>\` · \`hypothesis 7 confirmed because <the numbers>\`
 • \`thresholds\` · \`threshold pause.zeroResultSpend 4\` · \`threshold pause.zeroResultSpend default\`
 • \`scan comments\`: run the comment sweep now · \`journal\` · \`journal clear 7\`
 Anything else is a question for me. Changes, \`optimize\` and \`scan comments\` need an operator.`;
@@ -178,6 +181,88 @@ export async function handleCommand({ text, user, reply, jobs }) {
     return true;
   }
 
+  // ── the record: decisions with their reasons, hypotheses graded by the numbers ──
+  const author = user === LOCAL_OPERATOR ? 'the terminal' : `<@${user}>`;
+  const slackText = (x) => String(x || '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').trim();
+  const listDec = t.match(/^decisions(\s+all)?$/);
+  if (listDec) {
+    const rows = await listDecisions({ all: Boolean(listDec[1]), limit: 30 });
+    if (!rows.length) { await reply(listDec[1] ? 'No decisions recorded yet.' : 'No active decisions. Record one with `decision <what> because <why>`.'); return true; }
+    await reply(`:memo: *${listDec[1] ? 'Decisions, newest first' : 'Active decisions, newest first'}* (${rows.length})\n${rows.map((d) => `• ${decisionLine(d, { slack: true })}`).join('\n')}`);
+    return true;
+  }
+  // A question ("decision on the budget?") is for the agent, not a command.
+  if (/^decision\b/.test(t) && !/\?\s*$/.test(t)) {
+    if (!op) return needOp();
+    const help = 'Write it as `decision <what> because <why>`, for example `decision budget: no budget changes during the spring launch because we need one clean week to compare` '
+      + '(the topic before the colon is optional). Add `(replaces 12)` at the end when it overrides decision 12. To take one back: `decision 12 reversed because <why>`.';
+    const rev = raw.match(/^decision\s+#?(\d+)\s+reversed?\b\s*([\s\S]*)$/i);
+    if (rev) {
+      const why = slackText(rev[2]).replace(/^because\s+/i, '');
+      if (!/^because\s+\S/i.test(slackText(rev[2]))) { await reply(`:warning: Reversing a decision needs the reason: \`decision ${rev[1]} reversed because <why>\`. Nothing was changed.`); return true; }
+      try { await reverseDecision(rev[1], why, user); await reply(`:leftwards_arrow_with_hook: Decision #${rev[1]} reversed by ${author}. It stays in \`decisions all\` with the reason.`); }
+      catch (e) { await reply(`:warning: ${e.message}`); }
+      return true;
+    }
+    let body = slackText(raw.replace(/^decision\s*:?\s*/i, ''));
+    let replaces = null, brainKey = null;
+    const tail = body.match(/\s*\(([^()]*)\)\s*$/);
+    if (tail && /^\s*(replaces|brain)\b/i.test(tail[1])) {
+      for (const part of tail[1].split(',').map((x) => x.trim()).filter(Boolean)) {
+        const r = part.match(/^replaces\s+#?(\d+)$/i), b = part.match(/^brain\s+(\S+)$/i);
+        if (r) replaces = r[1];
+        else if (b) brainKey = b[1];
+        else { await reply(`:warning: "(${part})" is not understood: the end can say \`(replaces 12)\` or \`(brain business/offer)\`. Nothing was saved.`); return true; }
+      }
+      body = body.slice(0, tail.index);
+    }
+    let topic = null;
+    const tm = body.match(/^([A-Za-z][A-Za-z0-9_-]{0,39}):\s+/);
+    if (tm) { topic = tm[1]; body = body.slice(tm[0].length); }
+    const i = body.search(/\s+because\s+/i);
+    if (!body.trim() || i < 0) { await reply(`:warning: A decision is kept with its reason. ${help} Nothing was saved.`); return true; }
+    try {
+      const r = await recordDecision({ decision: body.slice(0, i), why: body.slice(i).replace(/^\s+because\s+/i, ''), topic, replaces, brain_key: brainKey, source: user === LOCAL_OPERATOR ? 'terminal command' : 'Slack command' }, user);
+      await reply(`:memo: Decision *#${r.id}* recorded by ${author}.${replaces ? ` #${replaces} is now replaced.` : ''} I work within it from now on.`);
+    } catch (e) { await reply(`:warning: ${e.message}`); }
+    return true;
+  }
+
+  const listHyp = t.match(/^hypotheses(\s+all)?$/);
+  if (listHyp) {
+    const rows = await listHypotheses({ all: Boolean(listHyp[1]), limit: 30 });
+    if (!rows.length) { await reply(listHyp[1] ? 'No hypotheses recorded yet.' : 'No open hypotheses. Record one with `hypothesis <what you believe works>`.'); return true; }
+    await reply(`:test_tube: *${listHyp[1] ? 'Hypotheses, newest first' : 'Open hypotheses, newest first'}* (${rows.length})\n${rows.map((h) => `• ${hypothesisLine(h, { slack: true })}`).join('\n')}`);
+    return true;
+  }
+  if (/^hypothesis\b/.test(t) && !/\?\s*$/.test(t)) {
+    if (!op) return needOp();
+    const body = slackText(raw.replace(/^hypothesis\s*:?\s*/i, ''));
+    const grade = body.match(/^#?(\d+)\s+(confirmed|refuted)\b\s*([\s\S]*)$/i);
+    if (grade) {
+      if (!/^because\s+\S/i.test(grade[3])) { await reply(`:warning: A grade needs the reason, with the numbers: \`hypothesis ${grade[1]} ${grade[2].toLowerCase()} because <why>\`. Nothing was saved.`); return true; }
+      try {
+        const r = await gradeHypothesis({ id: grade[1], verdict: grade[2], why: grade[3].replace(/^because\s+/i, '') }, user);
+        await reply(`:straight_ruler: Hypothesis #${grade[1]} graded *${grade[2].toLowerCase()}* by ${author}${r.was !== 'pending' ? ` (it was ${r.was})` : ''}.`);
+      } catch (e) { await reply(`:warning: ${e.message}`); }
+      return true;
+    }
+    let claim = body, kind = 'hypothesis', labels = {};
+    if (/^test\s+/i.test(claim)) { kind = 'test'; claim = claim.replace(/^test\s+/i, ''); }
+    const lab = claim.match(/\s*\[([^\]]*)\]\s*$/);
+    if (lab) { labels = lab[1]; claim = claim.slice(0, lab.index); }
+    if (!claim.trim()) {
+      await reply(':warning: Write it as `hypothesis <what you believe works>`, optionally with labels at the end: `hypothesis Theft angle brings cheaper test rides [audience=commuters, angle=theft]`. '
+        + '`hypothesis test <claim>` records a test that starts today. To grade one: `hypothesis 7 confirmed because <the numbers>`. Nothing was saved.');
+      return true;
+    }
+    try {
+      const r = await recordHypothesis({ claim, kind, labels }, user);
+      await reply(`:test_tube: ${kind === 'test' ? 'Test' : 'Hypothesis'} *#${r.id}* recorded by ${author}. Grade it when the numbers settle it: \`hypothesis ${r.id} confirmed because ...\` or \`refuted\`.`);
+    } catch (e) { await reply(`:warning: ${e.message}`); }
+    return true;
+  }
+
   if (/^journal\b/.test(t)) {
     const c = t.match(/^journal\s+clear\s+#?(\d+)$/);
     if (c) {
@@ -193,7 +278,7 @@ export async function handleCommand({ text, user, reply, jobs }) {
 
   if (/^status$/.test(t)) {
     await refreshPolicy().catch(() => {});
-    const [health, incidents, freeze] = await Promise.all([loopHealth(), openIncidents(), getState('optimizer/freeze')]);
+    const [health, incidents, freeze, rec] = await Promise.all([loopHealth(), openIncidents(), getState('optimizer/freeze'), recordStatus().catch(() => null)]);
     const p = policy();
     const spec = metricSpec();
     const target = !p.target ? 'not set (the optimizer is off until there is one)'
@@ -210,6 +295,7 @@ export async function handleCommand({ text, user, reply, jobs }) {
       ...(p.ignored?.length ? [`• :warning: Ignored brain rows: ${p.ignored.join('; ')}. Write them again (\`brain set ...\`) or remove them.`] : []),
       `• Operators: ${operators().length ? operators().map((u) => `<@${u}>`).join(', ') : 'none yet (nobody can approve cards or confirm orders)'}`,
       `• Optimizer: ${getConfigSafe().OPTIMIZER_ENABLED === false ? 'off (OPTIMIZER_ENABLED=false in the settings; whoever set up the agent turns it on)' : freeze?.on ? `frozen by ${freeze.by ? `<@${freeze.by}>` : 'an operator'}${freeze.note ? ` (${freeze.note})` : ''}; \`unfreeze\` resumes it` : !p.target ? 'on, but proposing nothing until there is a target' : 'on'}`,
+      `• Record: ${rec?.decisions == null ? 'the decisions and hypotheses tables are not there yet (npm start adds them)' : `${plural(rec.decisions, 'active decision')}, ${plural(rec.hypotheses ?? 0, 'open hypothesis', 'open hypotheses')}`}${rec?.views?.length ? ` · result views: ${rec.views.map((v) => (v.ok ? `${v.name} ok` : `${v.name} not set up (${v.problem})`)).join(', ')}` : ''}`,
       `• Jobs: ${health.map((h) => `${h.loop} ${h.consecutive_failures ? `(${plural(h.consecutive_failures, 'failure')})` : 'ok'}`).join(', ') || 'no runs yet'}`,
       `• Open issues: ${incidents.length ? incidents.map((i) => i.text.slice(0, 100)).join('; ') : 'none'}`,
     ].join('\n'));

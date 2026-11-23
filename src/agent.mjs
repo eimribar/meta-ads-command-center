@@ -1,8 +1,10 @@
-// One chat turn: the rules, the business context and live grounding, the tools this person may
-// use, the tool loop, and the receipt footer built from what the tools actually did.
+// One chat turn: the rules, the business context, the team's record and live grounding (with the
+// team's result views), the tools this person may use, the tool loop, and the receipt footer built
+// from what the tools actually did.
 import { runTools, textOf } from './reasoning.mjs';
 import { OPERATING_RULES, CHAT_RULES } from './prompts.mjs';
 import { brainBlock } from './brain.mjs';
+import { recordBlock, resultViewsBlock } from './record.mjs';
 import { allTools } from './tools.mjs';
 import { toolsForActor, isOperator, LOCAL_OPERATOR } from './auth.mjs';
 import { withExecution, withEffects, buildReceiptFooter } from './context.mjs';
@@ -42,17 +44,17 @@ export function authored(m) {
 export async function ask(history, { extra = '', actor = null, thread = null, key = null } = {}) {
   const effects = [];
   const tools = toolsForActor(allTools(), actor);
-  const [business, now] = await Promise.all([brainBlock(), grounding({ actor })]);
+  const [business, record, results, now] = await Promise.all([brainBlock(), recordBlock().catch(() => ''), resultViewsBlock().catch(() => ''), grounding({ actor })]);
   // Live context rides in the first block of the last user message, so the system prompt stays
   // byte identical and cached.
   const given = history.map((m, i) => (i === history.length - 1 && m.role === 'user' && m.author === undefined ? { ...m, author: actor, operator: isOperator(actor) } : m));
   const msgs = given.map((m) => ({ role: m.role, content: authored(m) }));
   const last = msgs[msgs.length - 1];
   const words = String(given[given.length - 1].content);
-  last.content = [{ type: 'text', text: [now, extra].filter(Boolean).join('\n\n') }, { type: 'text', text: last.content }];
+  last.content = [{ type: 'text', text: [now, results, extra].filter(Boolean).join('\n\n') }, { type: 'text', text: last.content }];
   // `words` is the person's own message, kept with any order it leads to.
   const { message } = await withExecution({ actor, kind: 'chat', thread, key: key || `chat:${Date.now()}`, words: words.slice(0, 500) }, () => withEffects(effects, () => runTools({
-    system: [`${OPERATING_RULES}\n\n${CHAT_RULES}`, business],
+    system: [`${OPERATING_RULES}\n\n${CHAT_RULES}`, business, record],
     messages: msgs,
     tools,
   })));

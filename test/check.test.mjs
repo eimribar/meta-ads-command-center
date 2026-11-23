@@ -70,7 +70,7 @@ test('missing tables this user can create are a warning; a bot outside the chann
   assert.match(r.text, /OK    connected \(SSL: require\)\nWARN  tables: the tables are not there yet: npm start creates them, or run npm run db:setup/);
   r = await runCheck(SECRETS, deps({ tables: ['brain'], inChannel: false }));
   assert.equal(r.ok, false);
-  assert.match(r.text, /WARN  tables: 13 of the 14 tables are missing[\s\S]*npm run db:setup/);
+  assert.match(r.text, /WARN  tables: 15 of the 16 tables are missing[\s\S]*npm run db:setup/);
   assert.match(r.text, /bot is not in the channel[\s\S]*fix: in that channel, type \/invite/);
   noValues(r.text);
 });
@@ -154,7 +154,7 @@ test('the bot line names the workspace, not a guessed bot user name', async () =
 test('the check reports owned tables as one red line, never as missing', async () => {
   const env = { ...BASE_ENV, META_ACCESS_TOKEN: '', META_AD_ACCOUNT_ID: '', SLACK_BOT_TOKEN: '', SLACK_APP_TOKEN: '', ANTHROPIC_API_KEY: '', DATABASE_URL: 'postgres://agent:pw@db.example.com:5432/agent' };
   const r = await runCheck(env, { pg: async () => fakePg({ owner: 'dbadmin', user: 'agent', canUse: false }) });
-  assert.match(r.text, /OK    connected \(SSL: require\)\nFIX   tables: 14 of the tables exist but belong to the database user dbadmin/);
+  assert.match(r.text, /OK    connected \(SSL: require\)\nFIX   tables: 16 of the tables exist but belong to the database user dbadmin/);
   assert.ok(!/missing/.test(r.text.split('Database')[1]));
 });
 

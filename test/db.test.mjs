@@ -82,7 +82,7 @@ test('tables that exist but belong to another user are named as such, with the o
   assert.equal(s.missing.length, 0, 'not taken for missing');
   const line = describeTables(s);
   assert.equal(line.level, 'bad');
-  assert.match(line.what, /14 of the tables exist but belong to the database user dbadmin, and this user \(agent\) cannot read and write them/);
+  assert.match(line.what, /16 of the tables exist but belong to the database user dbadmin, and this user \(agent\) cannot read and write them/);
   assert.match(line.fix, /GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO agent/);
   assert.ok(!/<this user>|<owner>/.test(line.fix));
   await assert.rejects(ensureTables(fakePg({ owner: 'dbadmin', user: 'agent', canUse: false })), /belong to the database user dbadmin/);
@@ -108,9 +108,9 @@ test('missing tables this user cannot create get the right fix, and nothing is t
   assert.equal(applied, false);
   // an upgrade added a table, and the tables belong to an admin: the owner runs the schema file
   const upgrade = describeTables(await tableStatus(fakePg({ tables: TABLES.slice(1), owner: 'postgres', user: 'agent', canCreate: false })));
-  assert.match(upgrade.what, /^1 of the 14 tables is missing \(brain\), and this user cannot create it$/);
+  assert.match(upgrade.what, /^1 of the 16 tables is missing \(brain\), and this user cannot create it$/);
   assert.match(upgrade.fix, /^after an upgrade, postgres \(or a database admin connected as postgres\) runs db\/schema\.sql/);
-  assert.equal(describeTables(await tableStatus(fakePg({ tables: TABLES.slice(2) }))).what.startsWith('2 of the 14 tables are missing'), true);
+  assert.equal(describeTables(await tableStatus(fakePg({ tables: TABLES.slice(2) }))).what.startsWith('2 of the 16 tables are missing'), true);
   assert.equal(plural(1, 'table'), '1 table');
   assert.equal(plural(14, 'table'), '14 tables');
   assert.equal(plural(1, 'missing table'), '1 missing table');

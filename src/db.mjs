@@ -14,7 +14,7 @@
 // `order` is 'column' or 'column desc', or a list of them.
 
 // Tables whose rows get a numeric `id` from the database.
-export const ID_TABLES = new Set(['actions_log', 'brain_history', 'learnings', 'timeline', 'write_journal', 'moderation_log']);
+export const ID_TABLES = new Set(['actions_log', 'brain_history', 'learnings', 'timeline', 'write_journal', 'moderation_log', 'decisions', 'hypotheses']);
 
 const IDENT = /^[a-z_][a-z0-9_]*$/;
 function ident(name) {
@@ -29,6 +29,7 @@ export const JSON_COLUMNS = {
   brain: ['content'], brain_history: ['content'], conversations: ['messages'],
   actions_log: ['before', 'after', 'guardrail_checks', 'evidence'], timeline: ['detail'],
   write_journal: ['source', 'operations', 'metadata', 'receipt'], state: ['value'],
+  hypotheses: ['labels', 'evidence'],
 };
 const toParam = (table, col, v) => {
   if (v === undefined || v === null) return null;

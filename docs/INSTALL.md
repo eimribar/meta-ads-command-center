@@ -86,8 +86,8 @@ Create the tables:
 npm run db:setup
 ```
 
-It prints `Created 14 tables; all 14 are ready (SSL: disable).` (with your SSL mode), and is safe to
-run again: the second time it prints `All 14 tables were already there; nothing changed`. `npm start`
+It prints `Created 16 tables; all 16 are ready (SSL: disable).` (with your SSL mode), and is safe to
+run again: the second time it prints `All 16 tables were already there; nothing changed`. `npm start`
 also creates any missing table on its own. On a database from an older version, both add what the
 new version needs (a column, an index) and name it.
 
@@ -106,7 +106,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE owner IN SCHEMA public GRANT USAGE, SELECT ON 
 
 The last two lines make the tables a later upgrade adds usable by the agent too, as long as the same
 owner creates them. The other way is to hand the tables to the agent's user, so upgrades need nobody
-else: `ALTER TABLE <name> OWNER TO agent;` for each of the 14 tables, run by a superuser. On a
+else: `ALTER TABLE <name> OWNER TO agent;` for each of the 16 tables, run by a superuser. On a
 managed Postgres that gives you no superuser, use the GRANT lines above. `npm run check` and
 `npm run db:setup` print both, with your real user names and every table name, when they find
 tables the agent cannot use. When the agent's user may not create tables in an empty database,

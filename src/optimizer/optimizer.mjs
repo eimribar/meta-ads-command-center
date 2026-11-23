@@ -17,6 +17,7 @@ import { runTools } from '../reasoning.mjs';
 import { OPERATING_RULES, OPTIMIZER_RULES, INVESTIGATE_ADDENDUM } from '../prompts.mjs';
 import { brainBlock } from '../brain.mjs';
 import { learningsBlock } from '../learn.mjs';
+import { recordBlock, resultViewsBlock } from '../record.mjs';
 import { metricSpec } from '../metrics.mjs';
 import { getState, withLease } from '../jobs.mjs';
 import { getConfig } from '../config.mjs';
@@ -196,11 +197,11 @@ function captureTool(capture) {
 
 async function propose(state, { investigate }) {
   const capture = { plan: null };
-  const [business, lessons] = await Promise.all([brainBlock().catch(() => ''), learningsBlock().catch(() => '')]);
+  const [business, lessons, record, results] = await Promise.all([brainBlock().catch(() => ''), learningsBlock().catch(() => ''), recordBlock().catch(() => ''), resultViewsBlock().catch(() => '')]);
   const tools = [captureTool(capture)];
   if (investigate) tools.push(...(await import('../tools.mjs')).readTools());
   await runTools({
-    system: [`${OPERATING_RULES}\n\n${OPTIMIZER_RULES}${investigate ? INVESTIGATE_ADDENDUM : ''}`, `${business}\n\n${lessons}`],
+    system: [`${OPERATING_RULES}\n\n${OPTIMIZER_RULES}${investigate ? INVESTIGATE_ADDENDUM : ''}`, [business, lessons, record, results].filter(Boolean).join('\n\n')],
     messages: [{ role: 'user', content: `STATE (mature data, pulled live this run):\n${JSON.stringify(state)}` }],
     tools, maxIterations: investigate ? 14 : 3, mustCall: 'propose_actions', done: () => Boolean(capture.plan),
   });

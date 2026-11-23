@@ -8,7 +8,8 @@ import { db } from './runtime.mjs';
 import { reportEffect, reportBlocked, currentExecution } from './context.mjs';
 import { runModeration, moderationSummary, surfaces } from './moderation.mjs';
 import { buildScoreboard } from './scoreboard.mjs';
-import { proposeBrainUpdate, askTeam } from './agentic.mjs';
+import { proposeBrainUpdate, askTeam, proposeRecord } from './agentic.mjs';
+import { configuredViews, readView } from './record.mjs';
 import { ACTION_TYPES } from './optimizer/policy.mjs';
 
 const days = (def, max = 30) => z.number().int().min(1).max(max).default(def);
@@ -41,7 +42,7 @@ export function graphQueryArgs(path, fields, params = {}) {
 }
 
 // ── read tools ─────────────────────────────────────────────────────────────
-const HISTORY_TABLES = ['actions_log', 'performance_daily', 'learnings', 'timeline', 'brain', 'brain_history', 'moderation_log', 'incidents', 'loop_health', 'job_runs', 'autonomy_policy'];
+const HISTORY_TABLES = ['actions_log', 'performance_daily', 'learnings', 'timeline', 'brain', 'brain_history', 'moderation_log', 'incidents', 'loop_health', 'job_runs', 'autonomy_policy', 'decisions', 'hypotheses'];
 
 export function readTools() {
   const list = [
@@ -103,7 +104,16 @@ export function readTools() {
       run: ({ platform, conversation_id, limit }) => (conversation_id ? read.conversation(conversation_id, limit) : read.inbox(platform, limit)) }),
     tool({ name: 'creative_scoreboard', description: 'The ads that spent most in the window (up to 30), ranked against the target with a verdict (winning, on track, behind, losing, too early).',
       input: z.object({ days: days(7) }), run: ({ days: d }) => buildScoreboard({ days: d, limit: 30 }) }),
-    tool({ name: 'query_history', description: `The agent's own records (not live Meta): ${HISTORY_TABLES.join(', ')}. Past proposals and the team's decisions are in actions_log.`,
+    tool({ name: 'result_view', description: 'Read one of the team\'s own result tables or views (the ones named in the brain row context/result_views, for example what happened after the click), over another window than the TEAM RESULTS block shows. Not Meta numbers.',
+      input: z.object({ name: z.string().max(63), days: z.number().int().min(1).max(365).nullable().default(null).describe('how many days back, for a view with a date column; null for its usual window'), rows: z.number().int().min(1).max(200).default(100) }),
+      run: async ({ name, days: d, rows }) => {
+        const views = await configuredViews();
+        const v = views.find((x) => x.name === name);
+        if (!v) return { ok: false, error: views.length ? `"${name}" is not one of the team's result views: ${views.map((x) => x.name).join(', ')}` : 'no result views are set (an operator names them in the brain row context/result_views)' };
+        const r = await readView(v, { days: d, rows });
+        return r.ok ? { ok: true, name, since: r.since, rows: r.rows } : { ok: false, error: r.problem };
+      } }),
+    tool({ name: 'query_history', description: `The agent's own records (not live Meta): ${HISTORY_TABLES.join(', ')}. Past proposals and the notes on them are in actions_log; the team's decisions (with their reasons) in decisions; what the team believes or tests in hypotheses.`,
       input: z.object({ table: z.enum(HISTORY_TABLES), where: z.record(z.string(), z.any()).default({}).describe('column to value, or {"gte": value} style operators'), order: z.string().nullable().default(null), limit: z.number().int().min(1).max(200).default(25) }),
       run: ({ table, where, order, limit }) => db().select(table, { where, order: order || undefined, limit }) }),
   ];
@@ -164,6 +174,15 @@ export function writeTools() {
     tool({ name: 'propose_brain_update', description: 'Propose adding or correcting a brain row (a business fact, policy or preference). Posts a card an operator applies.',
       input: z.object({ scope: z.string().max(64), key: z.string().max(64), content: z.any(), why: z.string().max(2000) }),
       run: async (args) => { const r = await proposeBrainUpdate(args); reportEffect('propose_brain_update', [], `proposed brain row ${args.scope}/${args.key}`); return r; } }),
+    tool({ name: 'propose_decision', description: 'Put a decision an operator stated (or the team settled in the thread) on a card to record it, with its reason in their words. An operator taps Record. Use replaces when it overrides an active decision.',
+      input: z.object({ decision: z.string().max(1000), why: z.string().max(2000), topic: z.string().max(40).nullable().default(null).describe('one or two plain words, like budget'), replaces: z.number().int().positive().nullable().default(null), brain_key: z.string().max(130).nullable().default(null).describe('the brain row it set, as section/name, if any') }),
+      run: async (args) => { const r = await proposeRecord('decision', args); reportEffect('propose_decision', [], `posted a card to record a decision: ${args.decision.slice(0, 80)} (nothing is recorded until an operator taps Record)`); return r; } }),
+    tool({ name: 'propose_hypothesis', description: 'Put what the team believes works, or is testing, on a card to record it. Labels name the segment it is about (any words the team uses). An operator taps Record.',
+      input: z.object({ claim: z.string().max(1000), kind: z.enum(['hypothesis', 'test']).default('hypothesis'), labels: z.record(z.string(), z.string()).default({}), started: z.string().nullable().default(null).describe('YYYY-MM-DD'), ended: z.string().nullable().default(null).describe('YYYY-MM-DD') }),
+      run: async (args) => { const r = await proposeRecord('hypothesis', args); reportEffect('propose_hypothesis', [], `posted a card to record a ${args.kind}: ${args.claim.slice(0, 80)} (nothing is recorded until an operator taps Record)`); return r; } }),
+    tool({ name: 'propose_grade', description: 'When the numbers settle an open hypothesis, put the verdict on a card, with the numbers in the reason. An operator taps Record.',
+      input: z.object({ id: z.number().int().positive(), verdict: z.enum(['confirmed', 'refuted']), why: z.string().max(2000) }),
+      run: async (args) => { const r = await proposeRecord('grade', args); reportEffect('propose_grade', [], `posted a card to grade hypothesis #${args.id} ${args.verdict} (nothing is recorded until an operator taps Record)`); return r; } }),
     tool({ name: 'ask_team', description: 'Ask the team a question only they can answer, with up to 4 answer buttons. The answer is saved to the brain under answers/<key>.',
       input: z.object({ question: z.string().max(1000), key: z.string().max(64).regex(/^[A-Za-z0-9_.-]+$/, 'letters, digits, dot, dash or underscore'), options: z.array(z.string().max(70)).max(4).default([]) }),
       run: async (args) => { const r = await askTeam(args); reportEffect('ask_team', [], `asked the team: ${args.question.slice(0, 60)}`); return r; } }),

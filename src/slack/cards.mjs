@@ -80,6 +80,33 @@ export function brainCardBlocks({ id, scope, key, content, current, why }) {
   ];
 }
 
+// A decision, hypothesis or grade to record. Text from the conversation is escaped, so it cannot
+// ping the channel or hide a link.
+const esc = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const labelsOf = (l) => { const e = Object.entries(l || {}); return e.length ? e.map(([k, v]) => `${esc(k)}=${esc(v)}`).join(', ') : ''; };
+export function recordText({ kind, payload: p, context: c }) {
+  if (kind === 'decision') {
+    return [`:memo: *Decision to record*${p.topic ? ` (${esc(p.topic)})` : ''}`, `*Decision:* ${esc(p.decision)}`, `*Why:* ${esc(p.why)}`,
+      ...(p.replaces ? [`_Replaces #${p.replaces}${c ? `: ${esc(c.decision).slice(0, 200)}` : ''}_`] : []), ...(p.brain_key ? [`_Brain row: ${esc(p.brain_key)}_`] : [])].join('\n');
+  }
+  if (kind === 'hypothesis') {
+    const l = labelsOf(p.labels);
+    return [`:test_tube: *${p.kind === 'test' ? 'Test' : 'Hypothesis'} to record*`, esc(p.claim), ...(l ? [`_Labels: ${l}_`] : []),
+      ...(p.kind === 'test' ? [`_Started ${p.started}${p.ended ? `, ends ${p.ended}` : ''}_`] : [])].join('\n');
+  }
+  return [`:straight_ruler: *Grade hypothesis #${p.id}: ${p.verdict}*`, ...(c ? [esc(c.claim)] : []), `*Why:* ${esc(p.why)}`].join('\n');
+}
+export function recordCardBlocks({ id, kind, payload, context, asked_by }) {
+  return [
+    section(recordText({ kind, payload, context })),
+    { type: 'context', elements: [{ type: 'mrkdwn', text: `${asked_by ? `From <@${asked_by}>'s message. ` : ''}Nothing is recorded until an operator taps Record.` }] },
+    { type: 'actions', block_id: cut(`record:${id}`, LIMITS.blockId), elements: [
+      { type: 'button', action_id: 'record_apply', style: 'primary', text: { type: 'plain_text', text: 'Record' }, value: JSON.stringify({ id }) },
+      { type: 'button', action_id: 'record_dismiss', text: { type: 'plain_text', text: 'Dismiss' }, value: JSON.stringify({ id }) },
+    ] },
+  ];
+}
+
 // A question for the team. The answer buttons carry the answer itself, so each answer is cut to
 // fit a button value with its key.
 export function askTeamBlocks({ question, key, options }) {

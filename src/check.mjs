@@ -4,6 +4,7 @@ import { parseConfig, REQUIRED, dbUser, DEFAULT_META_API_VERSION } from './confi
 import { actionTypeFor, actionTypesSeen } from './metrics.mjs';
 import { redact } from './redact.mjs';
 import { TABLES, explainDbError, tableStatus, describeTables } from './schema.mjs';
+import { parseResultViews } from './brain-rules.mjs';
 import { parseTarget } from './brain-rules.mjs';
 
 export { TABLES };
@@ -208,6 +209,7 @@ async function rest(L, c, has, deps) {
         const [row] = await pg.query("select content from brain where lower(scope) = 'policy' and lower(key) = 'target'").catch(() => []);
         out.brainTargetValue = parseTarget(row?.content);
         out.brainTarget = Boolean(out.brainTargetValue);
+        await checkResultViews(L, pg);
       }
     } catch (e) { L.bad('cannot use the database', explainDbError(e, { user: dbUser(c.DATABASE_URL) })); }
     finally { await pg?.close?.().catch?.(() => {}); }
@@ -227,6 +229,25 @@ async function rest(L, c, has, deps) {
     }
   } else L.warn('skipped', 'ANTHROPIC_API_KEY is needed first');
   return out;
+}
+
+// The team's result views named in the brain row context/result_views: each must exist and be
+// readable by this user. Without the row there is nothing to check and no line.
+async function checkResultViews(L, pg) {
+  const [row] = await pg.query("select content from brain where lower(scope) = 'context' and lower(key) = 'result_views'").catch(() => []);
+  if (row?.content == null) return;
+  const { value, problems } = parseResultViews(row.content);
+  if (problems.length) { L.warn(`result views: the brain row context/result_views is not valid (${problems.join('; ')})`, 'write it again: brain set context/result_views <names or JSON> (docs/SETTINGS.md)'); return; }
+  const names = value.map((v) => v.name);
+  const found = await pg.query(`select n as name, to_regclass(n) is not null as found,
+      case when to_regclass(n) is null then false else has_table_privilege(to_regclass(n), 'select') end as readable
+    from unnest($1::text[]) as n`, [names]).catch(() => null);
+  if (!found) { L.warn('result views: could not be checked', 'run npm run check again; the agent skips a view it cannot read'); return; }
+  const missing = found.filter((r) => !r.found).map((r) => r.name);
+  const closed = found.filter((r) => r.found && !r.readable).map((r) => r.name);
+  if (!missing.length && !closed.length) { L.ok(`result views: ${names.join(', ')}`); return; }
+  if (missing.length) L.warn(`result views: ${missing.join(', ')} not set up (no table or view by that name)`, 'create it in this database, or remove it from the brain row context/result_views; the agent skips it until then');
+  if (closed.length) L.warn(`result views: this user may not read ${closed.join(', ')}`, `GRANT SELECT ON ${closed.join(', ')} TO <the agent's database user>;`);
 }
 
 // The business numbers: where the target comes from, the ceiling, and whether the optimizer is on.

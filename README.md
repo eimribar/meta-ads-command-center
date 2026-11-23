@@ -23,6 +23,8 @@ every write.
 | **Comments** | Every hour: reads the comments on live ads and recent posts, hides clear spam, abuse and false claims, and flags the unsure ones to the channel. Replies and message answers are cards with the exact text, sent only when an operator taps Confirm. |
 | **Weekly review** | Every week: the decisions made, the lessons the optimizer now follows, and an ad scoreboard. |
 | **The brain** | What the agent knows about your business, written by your team (`brain set business/company ...`). The code carries no business facts; every prompt reads them from here. |
+| **Decisions and hypotheses** | What the team decided and why, and what it believes works, recorded from Slack (`decision ... because ...`, `hypothesis ...`) or from a card the agent posts when it hears one. The agent, the optimizer and the report work within them; hypotheses get graded against the numbers. |
+| **Your own results** | Tables or views your team keeps in the same database (what happened after the click), named in the brain and read every turn next to Meta's numbers. |
 
 Every amount is in the ad account's own currency, which it reads from Meta. It works for any kind
 of result: purchases, leads, booked calls, signups.

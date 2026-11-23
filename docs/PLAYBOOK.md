@@ -76,6 +76,17 @@ Rows to add as you go:
 | `business/campaigns` | What each campaign is for, especially ones that should be left alone (a brand campaign, a test). |
 | `business/creative_rules` | What the team never wants in an ad. |
 | `moderation/extra_posts` | Post ids to sweep beyond live ads and the latest posts, separated by commas. To find a post's id, ask the agent "list our recent Page posts with their ids". |
+| `context/result_views` | Your own results tables or views in the agent's database (what happened after the click), read every turn. See [SETTINGS.md](SETTINGS.md#result-views). |
+
+Record the decisions you already made, with their reasons, and what you believe works, so the
+agent starts from them instead of proposing them again:
+
+```
+decision budget: no budget changes during the spring launch because we need one clean week to compare
+hypothesis Theft angle brings cheaper test rides [audience=commuters, angle=theft]
+```
+
+[USING.md](USING.md#decisions-and-hypotheses) has the rest.
 
 Check what it knows with `brain`. Ask it "what do you know about our business?" and correct what is
 wrong; it proposes the fix as a card.
@@ -113,6 +124,10 @@ back on always stay with people.
 
 Read the weekly review: the lessons it now follows come from your "why" notes. If a lesson is wrong,
 reject the next card that follows it and say why.
+
+Go through `hypotheses` and grade the ones the numbers settled, with the numbers:
+`hypothesis 7 confirmed because $92 a test ride against $150, 14 days`. When the team changes its
+mind, record the new decision with `(replaces 3)` so the old one stops counting.
 
 ## The thresholds in plain words
 

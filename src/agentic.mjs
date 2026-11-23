@@ -1,12 +1,15 @@
-// Cards the agent raises on its own: a proposed brain update (Apply / Dismiss), a question for
-// the team (answer buttons), and the self-diagnosis posted when the optimizer freezes.
+// Cards the agent raises on its own: a proposed brain update (Apply / Dismiss), a decision,
+// hypothesis or grade to record (Record / Dismiss), a question for the team (answer buttons), and
+// the self-diagnosis posted when the optimizer freezes.
 import { rt } from './runtime.mjs';
 import { getConfig } from './config.mjs';
 import { complete, textOf } from './reasoning.mjs';
 import { OPERATING_RULES, BRAIN_UPDATE_RULES, FREEZE_RULES } from './prompts.mjs';
 import { checkName, getBrain } from './brain.mjs';
 import { checkBrainRow } from './brain-rules.mjs';
-import { brainCardBlocks, askTeamBlocks } from './slack/cards.mjs';
+import { brainCardBlocks, askTeamBlocks, recordCardBlocks } from './slack/cards.mjs';
+import { checkDecision, checkHypothesis, checkGrade, RecordError } from './record.mjs';
+import { db } from './runtime.mjs';
 import { setState, postOnce } from './jobs.mjs';
 import { currentExecution } from './context.mjs';
 
@@ -33,6 +36,33 @@ export async function proposeBrainUpdate({ scope, key, content, why }) {
   await setState(`brain_proposal/${id}`, { scope, key, content, why: line, by: currentExecution()?.actor || 'agent' });
   const r = await post(`Brain update proposed: ${scope}/${key}`, brainCardBlocks({ id, scope, key, content, current, why: line }));
   return { ok: true, posted: true, proposal_id: id, ts: r.ts };
+}
+
+// A decision, a hypothesis or a grade the agent heard in the conversation, put on a card. It is
+// checked first (a decision without its reason never reaches a card) and written only when an
+// operator taps Record; the operator who taps is kept as the one who decided.
+export async function proposeRecord(kind, input) {
+  let payload, context = null;
+  if (kind === 'decision') {
+    payload = checkDecision(input);
+    if (payload.replaces) {
+      const [old] = await db().select('decisions', { where: { id: payload.replaces } });
+      if (!old || old.status !== 'active') throw new RecordError(`Decision #${payload.replaces} is not an active decision, so nothing can replace it.`);
+      context = old;
+    }
+  } else if (kind === 'hypothesis') payload = checkHypothesis(input);
+  else if (kind === 'grade') {
+    payload = checkGrade(input);
+    const [h] = await db().select('hypotheses', { where: { id: payload.id } });
+    if (!h) throw new RecordError(`There is no hypothesis #${payload.id}.`);
+    context = h;
+  } else throw new RecordError(`unknown record kind ${kind}`);
+  const ex = currentExecution();
+  const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const proposal = { kind, payload, context, asked_by: ex?.actor || null, words: ex?.words || null };
+  await setState(`record_proposal/${id}`, proposal);
+  const r = await post(`To record: ${kind}`, recordCardBlocks({ id, ...proposal }));
+  return { ok: true, posted: true, proposal_id: id, ts: r.ts, note: 'Nothing is recorded yet. The card is posted; it is recorded only when an operator taps Record. Tell the person that, in one line.' };
 }
 
 export async function askTeam({ question, key, options = [] }) {

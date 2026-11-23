@@ -1,7 +1,8 @@
 // Approve and reject: the cards, the "why" modal, approve-all for the non-budget moves, and the
-// brain and ask-team buttons.
+// brain, record and ask-team buttons.
 import { rt, db } from '../runtime.mjs';
-import { approvalBlocks, batchHeaderBlocks, decisionModal, doneBlocks, orderDoneBlocks, BATCH_SAFE } from './cards.mjs';
+import { approvalBlocks, batchHeaderBlocks, decisionModal, doneBlocks, orderDoneBlocks, BATCH_SAFE, recordText } from './cards.mjs';
+import { recordDecision, recordHypothesis, gradeHypothesis } from '../record.mjs';
 import { confirmOrder, cancelOrder, describeOrder } from '../orders.mjs';
 import { applyApproved, rejectCard, describeDecided } from '../optimizer/executor.mjs';
 import { postToDesk, updateDesk } from './desk.mjs';
@@ -148,6 +149,38 @@ export function registerApprovals(app) {
     const p = await getState(`brain_proposal/${id}`);
     if (p) await setState(`brain_proposal/${id}`, { ...p, closed: 'dismissed', by: who(body) });
     await client.chat.update({ channel: body.channel.id, ts: body.message.ts, text: 'Dismissed', blocks: [{ type: 'section', text: { type: 'mrkdwn', text: `~Brain update ${p ? `${p.scope}/${p.key}` : ''}~ dismissed by ${mention(who(body))}.` } }] }).catch(() => {});
+  });
+
+  // record cards: a decision, hypothesis or grade the agent heard, written once on Record
+  const recordDone = (client, body, p, line) => client.chat.update({ channel: body.channel.id, ts: body.message.ts, text: line.replace(/[:*_~`]/g, '').slice(0, 150),
+    blocks: [{ type: 'section', text: { type: 'mrkdwn', text: `${p ? `${recordText(p).split('\n').slice(1).join('\n').slice(0, 2500)}\n` : ''}${line}` } }] }).catch(() => {});
+  app.action('record_apply', async ({ ack, body, action, client }) => {
+    await ack();
+    const { id } = JSON.parse(action.value);
+    const user = who(body);
+    const p = await getState(`record_proposal/${id}`);
+    if (!p || p.closed) { await recordDone(client, body, p, `:information_source: Already ${p?.closed || 'handled'}.`); return; }
+    // Claimed before the write, so a double tap records it once.
+    await setState(`record_proposal/${id}`, { ...p, closed: 'recording', by: user });
+    try {
+      let line;
+      const source = `Slack card${p.asked_by ? ` (from ${mention(p.asked_by)}'s message)` : ''}`;
+      if (p.kind === 'decision') { const r = await recordDecision({ ...p.payload, source }, user); line = `:memo: Recorded as decision *#${r.id}* by ${mention(user)}.${p.payload.replaces ? ` #${p.payload.replaces} is now replaced.` : ''}`; }
+      else if (p.kind === 'hypothesis') { const r = await recordHypothesis(p.payload, user); line = `:test_tube: Recorded as hypothesis *#${r.id}* by ${mention(user)}.`; }
+      else { const r = await gradeHypothesis(p.payload, user); line = `:straight_ruler: Hypothesis #${p.payload.id} graded *${p.payload.verdict}* by ${mention(user)}${r.was !== 'pending' ? ` (it was ${r.was})` : ''}.`; }
+      await setState(`record_proposal/${id}`, { ...p, closed: 'recorded', by: user });
+      await recordDone(client, body, p, line);
+    } catch (e) {
+      await setState(`record_proposal/${id}`, { ...p, closed: null });
+      await client.chat.postMessage({ channel: body.channel.id, thread_ts: body.message.ts, text: `:warning: Not recorded: ${String(e.message).slice(0, 400)}` }).catch(() => {});
+    }
+  });
+  app.action('record_dismiss', async ({ ack, body, action, client }) => {
+    await ack();
+    const { id } = JSON.parse(action.value);
+    const p = await getState(`record_proposal/${id}`);
+    if (p && !p.closed) await setState(`record_proposal/${id}`, { ...p, closed: 'dismissed', by: who(body) });
+    await recordDone(client, body, p, p?.closed ? `:information_source: Already ${p.closed}.` : `Dismissed by ${mention(who(body))}. Nothing was recorded.`);
   });
 
   // ask-team answer buttons

@@ -17,7 +17,7 @@ export function isOperator(userId) {
 export const READ_ONLY_TOOLS = new Set([
   'account_overview', 'campaign_detail', 'adset_detail', 'ad_performance', 'breakdown', 'spend_by_time',
   'recent_changes', 'run_insights', 'graph_query', 'ad_creative', 'video_retention', 'audiences', 'lead_forms', 'pixel_health', 'page_overview',
-  'instagram_overview', 'recent_comments', 'inbox', 'query_history', 'creative_scoreboard', 'web_search',
+  'instagram_overview', 'recent_comments', 'inbox', 'query_history', 'creative_scoreboard', 'result_view', 'web_search',
 ]);
 
 export function toolsForActor(tools, userId) {
